@@ -7,5 +7,5 @@ const secureCookies = process.env.SECURE_COOKIES === 'true';
 
 const db = openDatabase(dbFile);
 createAppServer(db, { secureCookies }).listen(port, () => {
-  console.log(`🎁 Gift Wish running at http://localhost:${port}  (database: ${dbFile})`);
+  console.log(`Gift Wish running at http://localhost:${port}  (database: ${dbFile})`);
 });

@@ -1,4 +1,5 @@
 // Gift Wish — a tiny single-page app with hash routing. No build step.
+import { icon } from './icons.js';
 const app = document.getElementById('app');
 const account = document.getElementById('account');
 const toastEl = document.getElementById('toast');
@@ -80,7 +81,7 @@ function renderAccount() {
     return;
   }
   account.innerHTML = `<span class="muted">Hi, ${esc(me.user.name)}</span>
-    <button class="link-btn" id="logout">Sign out</button>`;
+    <button class="link-btn" id="logout">${icon('log-out', { size: 16 })}Sign out</button>`;
   document.getElementById('logout').onclick = async () => {
     await api('POST', '/api/logout', {});
     location.hash = '#/';
@@ -90,15 +91,15 @@ function renderAccount() {
 
 function nav(active) {
   const others = me.members.filter((m) => m.id !== me.user.id);
-  const tab = (href, label, key, extra = '') =>
-    `<a href="${href}" class="tab ${active === key ? 'active' : ''}">${label}${extra}</a>`;
+  const tab = (href, label, key, extra = '', ic = '') =>
+    `<a href="${href}" class="tab ${active === key ? 'active' : ''}">${ic ? icon(ic, { size: 16 }) : ''}${label}${extra}</a>`;
   return `<nav class="tabs" aria-label="Lists">
-    ${tab('#/', '⭐ My list', `list-${me.user.id}`)}
-    ${tab('#/shopping', '🛍️ My shopping', 'shopping')}
+    ${tab('#/', 'My list', `list-${me.user.id}`, '', 'heart')}
+    ${tab('#/shopping', 'My shopping', 'shopping', '', 'shopping-bag')}
     ${others
       .map((m) => tab(`#/list/${m.id}`, esc(m.name), `list-${m.id}`, `<span class="count">${m.itemCount}</span>`))
       .join('')}
-    ${tab('#/family', '👪 Family', 'family')}
+    ${tab('#/family', 'Family', 'family', '', 'users')}
   </nav>`;
 }
 
@@ -179,7 +180,7 @@ function renderFamily() {
       <div class="invite">
         <code class="code">${esc(me.family.inviteCode)}</code>
         <input readonly value="${esc(link)}" aria-label="Invite link" />
-        <button class="btn" id="copy">Copy link</button>
+        <button class="btn" id="copy">${icon('copy', { size: 16 })}Copy link</button>
       </div>
       <h2>Members</h2>
       <ul class="members">
@@ -217,12 +218,12 @@ async function renderList(userId) {
     <section>
       <div class="list-head">
         <h1>${isMine ? 'My wish list' : `${esc(owner.name)}’s wish list`}</h1>
-        ${isMine ? '<button class="btn primary" id="add">+ Add a wish</button>' : ''}
+        ${isMine ? `<button class="btn primary" id="add">${icon('plus')}Add a wish</button>` : ''}
       </div>
       ${
         isMine
-          ? `<p class="hint">🙈 No peeking: you won’t see who is buying what from your list. Everyone else will, so nobody doubles up.</p>`
-          : `<p class="hint">Tap <b>I’ll get this</b> so others know, then <b>Mark bought</b> once you have it. ${esc(owner.name)} can’t see any of this.</p>`
+          ? `<p class="hint">${icon('eye-off')}<span>No peeking: you won’t see who is buying what from your list. Everyone else will, so nobody doubles up.</span></p>`
+          : `<p class="hint">${icon('gift')}<span>Tap <b>I’ll get this</b> so others know, then <b>Mark bought</b> once you have it. ${esc(owner.name)} can’t see any of this.</span></p>`
       }
       <div id="editor"></div>
       <ul class="items">
@@ -239,9 +240,9 @@ async function renderList(userId) {
 }
 
 function emptyHtml(isMine, owner) {
-  return `<li class="empty">${
+  return `<li class="empty">${icon('package-open', { size: 28 })}<span>${
     isMine ? 'Your list is empty. Add the first thing you’d love to get!' : `${esc(owner.name)} hasn’t added anything yet.`
-  }</li>`;
+  }</span></li>`;
 }
 
 function itemHtml(item, isMine) {
@@ -251,30 +252,30 @@ function itemHtml(item, isMine) {
   let cls = '';
 
   if (isMine) {
-    actions = `<button class="btn small" data-action="edit" data-id="${item.id}">Edit</button>
-               <button class="btn small ghost" data-action="delete" data-id="${item.id}">Remove</button>`;
+    actions = `<button class="btn small" data-action="edit" data-id="${item.id}">${icon('pencil', { size: 15 })}Edit</button>
+               <button class="btn small ghost" data-action="delete" data-id="${item.id}">${icon('trash-2', { size: 15 })}Remove</button>`;
   } else if (item.removed) {
     cls = 'removed';
-    status = `<span class="badge warn">Removed from the list</span>`;
-    actions = `<button class="btn small" data-action="release" data-id="${item.id}">Got it, dismiss</button>`;
+    status = `<span class="badge warn">${icon('triangle-alert', { size: 14 })}Removed from the list</span>`;
+    actions = `<button class="btn small" data-action="release" data-id="${item.id}">${icon('x', { size: 15 })}Got it, dismiss</button>`;
   } else if (!c) {
-    actions = `<button class="btn small primary" data-action="claim" data-id="${item.id}">I’ll get this</button>
-               <button class="btn small" data-action="purchase" data-id="${item.id}">I already bought it</button>`;
+    actions = `<button class="btn small primary" data-action="claim" data-id="${item.id}">${icon('bookmark-plus', { size: 15 })}I’ll get this</button>
+               <button class="btn small" data-action="purchase" data-id="${item.id}">${icon('check', { size: 15 })}I already bought it</button>`;
   } else if (c.byMe) {
     cls = c.status === 'purchased' ? 'bought' : 'mine';
     status =
       c.status === 'purchased'
-        ? `<span class="badge done">✓ You bought this</span>`
-        : `<span class="badge mine">You’re getting this</span>`;
+        ? `<span class="badge done">${icon('circle-check', { size: 14 })}You bought this</span>`
+        : `<span class="badge mine">${icon('bookmark-plus', { size: 14 })}You’re getting this</span>`;
     actions =
-      (c.status === 'claimed' ? `<button class="btn small primary" data-action="purchase" data-id="${item.id}">Mark bought</button>` : '') +
-      `<button class="btn small ghost" data-action="release" data-id="${item.id}">${c.status === 'purchased' ? 'Undo' : 'Release'}</button>`;
+      (c.status === 'claimed' ? `<button class="btn small primary" data-action="purchase" data-id="${item.id}">${icon('check', { size: 15 })}Mark bought</button>` : '') +
+      `<button class="btn small ghost" data-action="release" data-id="${item.id}">${icon('undo-2', { size: 15 })}${c.status === 'purchased' ? 'Undo' : 'Release'}</button>`;
   } else {
     cls = c.status === 'purchased' ? 'bought' : 'taken';
     status =
       c.status === 'purchased'
-        ? `<span class="badge done">✓ Bought by ${esc(c.userName)}</span>`
-        : `<span class="badge taken">${esc(c.userName)} is getting this</span>`;
+        ? `<span class="badge done">${icon('circle-check', { size: 14 })}Bought by ${esc(c.userName)}</span>`
+        : `<span class="badge taken">${icon('bookmark-plus', { size: 14 })}${esc(c.userName)} is getting this</span>`;
   }
 
   return `<li class="item ${cls}">
@@ -285,7 +286,7 @@ function itemHtml(item, isMine) {
       </div>
       <div class="meta">
         ${item.price ? `<span>${esc(item.price)}</span>` : ''}
-        ${item.url ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">🔗 ${esc(hostOf(item.url))}</a>` : ''}
+        ${item.url ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${icon('external-link', { size: 14 })}${esc(hostOf(item.url))}</a>` : ''}
       </div>
       ${item.notes ? `<p class="notes">${esc(item.notes)}</p>` : ''}
       ${status}
@@ -312,7 +313,7 @@ function openEditor(item) {
       <label>Notes<textarea name="notes" maxlength="1000" rows="2" placeholder="Color, size, any brand is fine…">${esc(item?.notes)}</textarea></label>
       <div class="row end">
         <button type="button" class="btn ghost" id="cancel">Cancel</button>
-        <button class="btn primary">${item ? 'Save' : 'Add to my list'}</button>
+        <button class="btn primary">${icon(item ? 'check' : 'plus')}${item ? 'Save' : 'Add to my list'}</button>
       </div>
     </form>`;
   box.querySelector('[name=title]').focus();
@@ -321,7 +322,7 @@ function openEditor(item) {
     e.preventDefault();
     try {
       await api(item ? 'PUT' : 'POST', item ? `/api/items/${item.id}` : '/api/items', formData(e.target));
-      toast(item ? 'Saved' : 'Added to your list 🎉');
+      toast(item ? 'Saved' : 'Added to your list');
       render();
     } catch (err) {
       toast(err.message, true);
@@ -346,7 +347,7 @@ async function onItemAction(action, id, items, owner) {
         break;
       case 'purchase':
         await api('PUT', `/api/items/${id}/claim`, { status: 'purchased' });
-        toast('Marked as bought ✓');
+        toast('Marked as bought');
         break;
       case 'release':
         await api('DELETE', `/api/items/${id}/claim`);

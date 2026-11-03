@@ -1,4 +1,4 @@
-# 🎁 Gift Wish
+# Gift Wish
 
 A family gift wish list app. Everyone makes a wish list with links to where to buy each thing.
 Everyone else in the family can see it and mark **"I'll get this"**, then **"Mark bought"**, so nobody
@@ -51,7 +51,7 @@ src/
   api.js      routes and the visibility rules (see present())
   auth.js     password hashing (scrypt), sessions, invite codes
   db.js       SQLite schema
-public/       single-page front end (plain HTML/CSS/JS, no build step)
+public/       single-page front end (plain HTML/CSS/JS, no build step; Lucide icons vendored in icons.js)
 test/         node:test API tests
 ```
 
