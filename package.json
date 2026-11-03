@@ -1,0 +1,16 @@
+{
+  "name": "gift-wish",
+  "version": "0.1.0",
+  "description": "Family gift wish lists: share what you want, see what others are buying, with no spoilers for the list owner.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/index.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch src/index.js",
+    "test": "node --disable-warning=ExperimentalWarning --test"
+  },
+  "license": "MIT"
+}
