@@ -21,6 +21,11 @@ Details:
 - **Removed items.** If the owner removes an item someone already claimed or bought, that person sees
   "Removed from the list" (so they know to return it or pick something else). The owner gets the same
   response either way, so removing something doesn't tell them whether it was claimed.
+- **Import from Amazon.** On your list, choose *Import from Amazon* and paste a public or shared wish list
+  link. You'll see every item (name, price, link, Amazon priority and comment), can uncheck or rename
+  anything, and only then are they added. Items already on your list are unchecked. If Amazon blocks the
+  request (it sometimes shows a robot check to servers), paste product links instead, or save the wish list
+  page from your browser and upload it.
 - **Families.** Create a family and share the invite link (`/?invite=CODE`) or code. Each family can
   only see its own members' lists.
 
@@ -49,6 +54,7 @@ src/
   index.js    entry point (reads env, starts server)
   server.js   HTTP server, cookies, static files
   api.js      routes and the visibility rules (see present())
+  amazon.js   reads Amazon wish lists, pasted links and saved pages for import
   auth.js     password hashing (scrypt), sessions, invite codes
   db.js       SQLite schema
 public/       single-page front end (plain HTML/CSS/JS, no build step; Lucide icons vendored in icons.js)

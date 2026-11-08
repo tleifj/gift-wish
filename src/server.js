@@ -7,6 +7,7 @@ import { createApi, HttpError } from './api.js';
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const COOKIE = 'gw_session';
 const MAX_BODY = 64 * 1024;
+const MAX_IMPORT_BODY = 8 * 1024 * 1024; // a saved Amazon wish list page can be a few MB
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -27,12 +28,12 @@ function parseCookies(header = '') {
   return out;
 }
 
-async function readJson(req) {
+async function readJson(req, limit = MAX_BODY) {
   let size = 0;
   const chunks = [];
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_BODY) throw new HttpError(413, 'Request too large');
+    if (size > limit) throw new HttpError(413, 'That is too large to upload');
     chunks.push(chunk);
   }
   if (!chunks.length) return {};
@@ -76,8 +77,8 @@ async function serveStatic(req, res, pathname) {
   }
 }
 
-export function createAppServer(db, { secureCookies = false } = {}) {
-  const api = createApi(db);
+export function createAppServer(db, { secureCookies = false, fetchImpl } = {}) {
+  const api = createApi(db, { fetchImpl });
   const cookieAttrs = `Path=/; HttpOnly; SameSite=Lax${secureCookies ? '; Secure' : ''}`;
 
   return createServer(async (req, res) => {
@@ -108,10 +109,10 @@ export function createAppServer(db, { secureCookies = false } = {}) {
         // cross-site HTML form cannot send without a CORS preflight.
         const type = req.headers['content-type'] || '';
         if (!type.startsWith('application/json')) throw new HttpError(415, 'Expected JSON');
-        ctx.body = await readJson(req);
+        ctx.body = await readJson(req, url.pathname === '/api/import/preview' ? MAX_IMPORT_BODY : MAX_BODY);
       }
 
-      const result = api(ctx);
+      const result = await api(ctx);
       send(res, result.status || 200, result.body, headers);
     } catch (err) {
       if (err instanceof HttpError) {

@@ -218,7 +218,14 @@ async function renderList(userId) {
     <section>
       <div class="list-head">
         <h1>${isMine ? 'My wish list' : `${esc(owner.name)}’s wish list`}</h1>
-        ${isMine ? `<button class="btn primary" id="add">${icon('plus')}Add a wish</button>` : ''}
+        ${
+          isMine
+            ? `<div class="head-actions">
+                <button class="btn" id="import">${icon('import')}Import from Amazon</button>
+                <button class="btn primary" id="add">${icon('plus')}Add a wish</button>
+              </div>`
+            : ''
+        }
       </div>
       ${
         isMine
@@ -233,6 +240,7 @@ async function renderList(userId) {
 
   if (isMine) {
     document.getElementById('add').onclick = () => openEditor(null);
+    document.getElementById('import').onclick = () => openImporter();
   }
   app.querySelectorAll('[data-action]').forEach((btn) => {
     btn.onclick = () => onItemAction(btn.dataset.action, Number(btn.dataset.id), items, owner);
@@ -241,7 +249,7 @@ async function renderList(userId) {
 
 function emptyHtml(isMine, owner) {
   return `<li class="empty">${icon('package-open', { size: 28 })}<span>${
-    isMine ? 'Your list is empty. Add the first thing you’d love to get!' : `${esc(owner.name)} hasn’t added anything yet.`
+    isMine ? 'Your list is empty. Add the first thing you’d love to get, or import your Amazon wish list.' : `${esc(owner.name)} hasn’t added anything yet.`
   }</span></li>`;
 }
 
@@ -293,6 +301,148 @@ function itemHtml(item, isMine) {
     </div>
     <div class="actions">${actions}</div>
   </li>`;
+}
+
+// ---------- import ----------
+const IMPORT_SOURCES = [
+  { key: 'wishlist', label: 'Wish list link', icon: 'link' },
+  { key: 'links', label: 'Paste links', icon: 'clipboard-paste' },
+  { key: 'file', label: 'Upload saved page', icon: 'upload' },
+];
+
+function openImporter(source = 'wishlist') {
+  const box = document.getElementById('editor');
+  const help = {
+    wishlist: `<p class="help">On Amazon, open your wish list, choose <b>Send list to others</b>, and copy the link.
+      The list needs to be <b>Public</b> or <b>Shared</b>.</p>
+      <label>Amazon wish list link<input name="url" inputmode="url" required placeholder="https://www.amazon.com/hz/wishlist/ls/…" /></label>`,
+    links: `<p class="help">Paste product links, one per line. They can be from Amazon or any other store.
+      You can fix the names and prices before adding them.</p>
+      <label>Links<textarea name="text" rows="5" required placeholder="https://www.amazon.com/…/dp/B00006JSUA"></textarea></label>`,
+    file: `<p class="help">If the link doesn’t work, open your wish list on Amazon, scroll to the bottom so every item loads,
+      then save the page (<b>File › Save Page As</b>) and choose that file here.</p>
+      <label>Saved wish list page<input name="file" type="file" accept=".html,.htm,text/html" required /></label>`,
+  };
+  box.innerHTML = `
+    <div class="card editor importer">
+      <div class="row-between">
+        <h2>Import from Amazon</h2>
+        <button type="button" class="btn small ghost" id="close-import">${icon('x', { size: 15 })}Close</button>
+      </div>
+      <div class="segmented" role="tablist">
+        ${IMPORT_SOURCES.map(
+          (s) => `<button type="button" role="tab" class="seg ${s.key === source ? 'active' : ''}" aria-selected="${s.key === source}"
+            data-source="${s.key}">${icon(s.icon, { size: 15 })}${s.label}</button>`
+        ).join('')}
+      </div>
+      <form id="import-form">
+        ${help[source]}
+        <div class="row end"><button class="btn primary" id="find">Find items</button></div>
+      </form>
+      <div id="import-preview"></div>
+    </div>`;
+  box.querySelector('input, textarea').focus();
+  document.getElementById('close-import').onclick = () => (box.innerHTML = '');
+  box.querySelectorAll('[data-source]').forEach((b) => (b.onclick = () => openImporter(b.dataset.source)));
+
+  document.getElementById('import-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('find');
+    btn.disabled = true;
+    btn.innerHTML = `${icon('loader-circle', { size: 16 })}Looking…`;
+    btn.classList.add('busy');
+    try {
+      const f = e.target;
+      const body = { source };
+      if (source === 'wishlist') body.url = f.url.value;
+      if (source === 'links') body.text = f.text.value;
+      if (source === 'file') {
+        const file = f.file.files[0];
+        if (!file) throw new Error('Choose the saved wish list page');
+        if (file.size > 8 * 1024 * 1024) throw new Error('That file is too large. Save the page as "HTML only" and try again.');
+        body.html = await file.text();
+      }
+      const result = await api('POST', '/api/import/preview', body);
+      renderImportPreview(result);
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('busy');
+      btn.textContent = 'Find items';
+    }
+  };
+}
+
+function renderImportPreview({ listName, items }) {
+  const box = document.getElementById('import-preview');
+  const fresh = items.filter((i) => !i.alreadyOnList).length;
+  box.innerHTML = `
+    <form id="import-pick">
+      <div class="row-between">
+        <p class="help"><b>${items.length} item${items.length === 1 ? '' : 's'}</b> found${listName ? ` in “${esc(listName)}”` : ''}.
+          Uncheck anything you don’t want, and fix names if needed.</p>
+        <label class="check-all"><input type="checkbox" id="pick-all" ${fresh === items.length ? 'checked' : ''} /> Select all</label>
+      </div>
+      <ul class="pick-list">
+        ${items
+          .map(
+            (it, n) => `<li class="pick ${it.alreadyOnList ? 'dupe' : ''}">
+              <input type="checkbox" data-n="${n}" aria-label="Add ${esc(it.title)}" ${it.alreadyOnList ? '' : 'checked'} />
+              <div class="pick-main">
+                <input class="pick-title" data-n="${n}" value="${esc(it.title)}" maxlength="200" aria-label="Name" />
+                <div class="meta">
+                  ${it.price ? `<span>${esc(it.price)}</span>` : ''}
+                  ${it.url ? `<a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">${icon('external-link', { size: 14 })}${esc(hostOf(it.url))}</a>` : ''}
+                  ${it.priority !== 2 ? `<span class="prio p${it.priority}">${PRIORITY[it.priority]}</span>` : ''}
+                  ${it.alreadyOnList ? '<span class="badge warn">Already on your list</span>' : ''}
+                </div>
+                ${it.notes ? `<p class="notes">${esc(it.notes)}</p>` : ''}
+              </div>
+            </li>`
+          )
+          .join('')}
+      </ul>
+      <div class="row end"><button class="btn primary" id="add-picked"></button></div>
+    </form>`;
+
+  const boxes = [...box.querySelectorAll('input[type=checkbox][data-n]')];
+  const addBtn = document.getElementById('add-picked');
+  const allBox = document.getElementById('pick-all');
+  const update = () => {
+    const n = boxes.filter((b) => b.checked).length;
+    addBtn.disabled = n === 0;
+    addBtn.innerHTML = n ? `${icon('plus')}Add ${n} item${n === 1 ? '' : 's'} to my list` : 'Choose items to add';
+    allBox.checked = n === boxes.length;
+  };
+  boxes.forEach((b) => (b.onchange = update));
+  allBox.onchange = () => {
+    boxes.forEach((b) => (b.checked = allBox.checked));
+    update();
+  };
+  update();
+  box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  document.getElementById('import-pick').onsubmit = async (e) => {
+    e.preventDefault();
+    const titles = box.querySelectorAll('.pick-title');
+    const chosen = boxes
+      .filter((b) => b.checked)
+      .map((b) => {
+        const n = Number(b.dataset.n);
+        const { title, url, price, notes, priority } = items[n];
+        return { title: titles[n].value.trim() || title, url, price, notes, priority };
+      });
+    addBtn.disabled = true;
+    try {
+      const { added } = await api('POST', '/api/items/import', { items: chosen });
+      toast(`Added ${added} item${added === 1 ? '' : 's'} to your list`);
+      render();
+    } catch (err) {
+      toast(err.message, true);
+      addBtn.disabled = false;
+    }
+  };
 }
 
 function openEditor(item) {

@@ -220,8 +220,41 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 }
 .toast.error { background: var(--warn); color: var(--accent-ink); }
 
+/* ---------- import ---------- */
+.head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.row-between { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.importer h2 { margin: 0; }
+.importer { display: grid; gap: 16px; }
+.help { margin: 0; font-size: 0.9rem; color: var(--muted); font-weight: 400; }
+.help b { color: var(--text); }
+.segmented { display: flex; gap: 4px; padding: 4px; background: var(--bg); border: 1px solid var(--border); border-radius: 999px; flex-wrap: wrap; }
+.seg {
+  font: inherit; font-size: 0.88rem; font-weight: 600; flex: 1 1 auto;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 7px 12px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer;
+}
+.seg:hover { color: var(--text); }
+.seg.active { background: var(--accent); color: var(--accent-ink); }
+.seg:focus-visible, .btn:focus-visible, .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn:disabled { opacity: 0.55; cursor: default; }
+.btn.busy .icon { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .btn.busy .icon { animation: none; } }
+.check-all { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 0.88rem; }
+.check-all input, .pick > input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
+.pick-list { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 6px; max-height: 55vh; overflow-y: auto; }
+.pick { display: flex; gap: 12px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.pick > input[type=checkbox] { margin-top: 10px; }
+.pick.dupe { opacity: 0.7; }
+.pick-main { min-width: 0; flex: 1; display: grid; gap: 4px; }
+.pick-title { font-weight: 600; padding: 6px 8px; background: var(--surface); }
+.pick .badge { margin-top: 0; }
+input[type=file] { padding: 8px; }
+
 @media (max-width: 560px) {
   .item { flex-direction: column; }
   .actions { flex-direction: row; flex-wrap: wrap; }
   .row { grid-template-columns: 1fr; }
+  .segmented { flex-direction: column; border-radius: 14px; }
+  .seg { border-radius: 10px; }
 }

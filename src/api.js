@@ -6,6 +6,7 @@ import {
   userFromSession,
   verifyPassword,
 } from './auth.js';
+import { ImportError, importFromLinks, importFromSavedPage, importFromWishlistUrl } from './amazon.js';
 
 export class HttpError extends Error {
   constructor(status, message) {
@@ -88,7 +89,7 @@ const ITEM_SELECT = `
     LEFT JOIN users cu ON cu.id = c.user_id
 `;
 
-export function createApi(db) {
+export function createApi(db, { fetchImpl = fetch } = {}) {
   const q = {
     userByEmail: db.prepare('SELECT * FROM users WHERE email = ?'),
     userById: db.prepare('SELECT id, name, family_id FROM users WHERE id = ?'),
@@ -129,7 +130,18 @@ export function createApi(db) {
     ),
     deleteClaim: db.prepare('DELETE FROM claims WHERE item_id = ?'),
     ownerNames: db.prepare('SELECT id, name FROM users WHERE family_id = ?'),
+    myLiveItems: db.prepare('SELECT title, url FROM items WHERE owner_id = ? AND deleted_at IS NULL'),
   };
+
+  function itemFields(body) {
+    return [
+      text(body.title, 'Title', { required: true, max: 200 }),
+      link(body.url),
+      text(body.price, 'Price', { max: 40 }),
+      text(body.notes, 'Notes', { max: 1000 }),
+      priority(body.priority),
+    ];
+  }
 
   function requireUser(ctx) {
     const user = userFromSession(db, ctx.token);
@@ -263,14 +275,7 @@ export function createApi(db) {
 
     'POST /api/items': (ctx) => {
       const user = requireFamily(ctx);
-      const { lastInsertRowid } = q.insertItem.run(
-        user.id,
-        text(ctx.body.title, 'Title', { required: true, max: 200 }),
-        link(ctx.body.url),
-        text(ctx.body.price, 'Price', { max: 40 }),
-        text(ctx.body.notes, 'Notes', { max: 1000 }),
-        priority(ctx.body.priority)
-      );
+      const { lastInsertRowid } = q.insertItem.run(user.id, ...itemFields(ctx.body));
       return { status: 201, body: { item: present(q.itemRow.get(Number(lastInsertRowid)), user) } };
     },
 
@@ -278,14 +283,7 @@ export function createApi(db) {
       const user = requireFamily(ctx);
       const row = loadItem(user, ctx.params.id);
       if (row.owner_id !== user.id || row.deleted_at) fail(404, 'Item not found');
-      q.updateItem.run(
-        text(ctx.body.title, 'Title', { required: true, max: 200 }),
-        link(ctx.body.url),
-        text(ctx.body.price, 'Price', { max: 40 }),
-        text(ctx.body.notes, 'Notes', { max: 1000 }),
-        priority(ctx.body.priority),
-        row.id
-      );
+      q.updateItem.run(...itemFields(ctx.body), row.id);
       return { body: { item: present(q.itemRow.get(row.id), user) } };
     },
 
@@ -298,6 +296,59 @@ export function createApi(db) {
       if (row.claim_status) q.softDelete.run(row.id);
       else q.hardDelete.run(row.id);
       return { body: { ok: true } };
+    },
+
+    // Reads items from an Amazon wish list (or pasted links / a saved page) for review.
+    // Nothing is saved here; the person picks what to keep, then calls /api/items/import.
+    'POST /api/import/preview': async (ctx) => {
+      const user = requireFamily(ctx);
+      const { source } = ctx.body;
+      let result;
+      try {
+        if (source === 'wishlist') result = await importFromWishlistUrl(ctx.body.url, { fetchImpl });
+        else if (source === 'links') result = importFromLinks(ctx.body.text);
+        else if (source === 'file') result = importFromSavedPage(ctx.body.html);
+        else fail(400, 'Unknown import type');
+      } catch (err) {
+        if (err instanceof ImportError) fail(err.status, err.message);
+        throw err;
+      }
+      const existing = q.myLiveItems.all(user.id);
+      const urls = new Set(existing.map((i) => i.url).filter(Boolean));
+      const titles = new Set(existing.map((i) => i.title.toLowerCase()));
+      return {
+        body: {
+          listName: result.listName,
+          items: result.items.map((i) => ({
+            ...i,
+            alreadyOnList: (i.url && urls.has(i.url)) || titles.has(i.title.toLowerCase()),
+          })),
+        },
+      };
+    },
+
+    'POST /api/items/import': (ctx) => {
+      const user = requireFamily(ctx);
+      const list = ctx.body.items;
+      if (!Array.isArray(list) || !list.length) fail(400, 'Choose at least one item to add');
+      if (list.length > 300) fail(400, 'You can add up to 300 items at a time');
+      const rows = list.map((i, n) => {
+        try {
+          return itemFields(i && typeof i === 'object' ? i : {});
+        } catch (err) {
+          if (err instanceof HttpError) fail(400, `Item ${n + 1}: ${err.message}`);
+          throw err;
+        }
+      });
+      db.exec('BEGIN');
+      try {
+        for (const r of rows) q.insertItem.run(user.id, ...r);
+        db.exec('COMMIT');
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+      }
+      return { status: 201, body: { added: rows.length } };
     },
 
     // Mark "I'm getting this" (status = claimed) or "I bought it" (status = purchased).
