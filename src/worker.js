@@ -73,8 +73,11 @@ export default {
       return json(result.status || 200, result.body, headers);
     } catch (err) {
       if (err instanceof HttpError) return json(err.status, { error: err.message });
-      console.error(err);
-      return json(500, { error: 'Something went wrong' });
+      // One log line with the actual message (D1 errors otherwise show up as a bare stack trace),
+      // plus a reference the person can quote. It matches the request's Ray ID in Cloudflare's logs.
+      const ref = (request.headers.get('cf-ray') || crypto.randomUUID()).slice(0, 16);
+      console.error(`[ref ${ref}] ${request.method} ${url.pathname} failed: ${err?.message ?? err}`, err?.stack ?? '');
+      return json(500, { error: `Something went wrong (ref ${ref})` });
     }
   },
 };
