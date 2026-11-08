@@ -1,16 +1,22 @@
 {
   "name": "gift-wish",
   "version": "0.1.0",
-  "description": "Family gift wish lists: share what you want, see what others are buying, with no spoilers for the list owner.",
+  "description": "Family gift wish lists: share what you want, see what others are buying, with no spoilers for the list owner. Runs on Cloudflare Workers + D1.",
   "type": "module",
   "private": true,
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22"
   },
   "scripts": {
-    "start": "node --disable-warning=ExperimentalWarning src/index.js",
-    "dev": "node --disable-warning=ExperimentalWarning --watch src/index.js",
-    "test": "node --disable-warning=ExperimentalWarning --test"
+    "dev": "wrangler d1 migrations apply gift-wish --local && wrangler dev --port 8787",
+    "deploy": "node scripts/deploy.mjs",
+    "db:migrate:local": "wrangler d1 migrations apply gift-wish --local",
+    "db:migrate:remote": "wrangler d1 migrations apply gift-wish --remote",
+    "test": "node --test \"test/**/*.test.js\""
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "miniflare": "4.20260730.0",
+    "wrangler": "4.152.0"
+  }
 }

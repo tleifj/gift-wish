@@ -29,36 +29,63 @@ Details:
 - **Families.** Create a family and share the invite link (`/?invite=CODE`) or code. Each family can
   only see its own members' lists.
 
-## Running it
+## How it runs
 
-Requires **Node.js 22.13+**. There are no dependencies: it uses Node's built-in `node:sqlite`.
+The app runs on **Cloudflare Workers** with a **D1** database (Cloudflare's hosted SQLite).
+
+- `public/` is served as static files. Only requests to `/api/*` run the Worker (`src/worker.js`).
+- All data lives in the D1 database `gift-wish`. Deploying new code never touches it.
+- Schema changes are numbered files in `migrations/`. `npm run deploy` applies any new ones
+  before deploying the code.
+
+## Deploying from GitHub (Workers Builds)
+
+1. In the Cloudflare dashboard, go to **Workers & Pages**, choose **Create**, then **Import a repository**,
+   and pick this repo and the branch to deploy.
+2. Leave the build command empty, and set the **deploy command** to:
+   ```
+   npm run deploy
+   ```
+   (The default, `npx wrangler deploy`, would skip the database migrations.)
+3. Deploy. On the first deploy, Wrangler creates the `gift-wish` D1 database and the tables.
+   After that, every push to the branch redeploys the app and keeps the data.
+
+Your family can then use the `*.workers.dev` address Cloudflare shows, or you can add your own domain
+under the Worker's **Settings > Domains & Routes**.
+
+**Plan note:** passwords are hashed with PBKDF2 (100,000 rounds), which can take more than the free plan's
+10 ms of CPU per request. If sign-in or sign-up sometimes fails with a "CPU time exceeded" error on the free
+plan, the Workers Paid plan ($5/month) fixes it.
+
+**Backups:** D1 Time Travel can restore the database to any point in the last 7 days (30 days on the paid plan):
+`npx wrangler d1 time-travel restore gift-wish --timestamp=<when>`.
+
+## Developing locally
+
+Requires **Node.js 22+**.
 
 ```bash
-npm start          # http://localhost:3000
-npm run dev        # restarts on file changes
-npm test           # API tests, including the no-spoilers rules
+npm install
+npm run dev        # creates a local D1 database, then serves http://localhost:8787
+npm test           # runs the Worker in Miniflare against a fresh database
 ```
 
-Configuration (environment variables):
-
-| Variable         | Default               | Notes |
-|------------------|-----------------------|-------|
-| `PORT`           | `3000`                | |
-| `DATABASE_FILE`  | `data/gift-wish.db`   | SQLite file. Back it up and keep it on persistent storage. |
-| `SECURE_COOKIES` | `false`               | Set to `true` when serving over HTTPS. |
+Local data is kept in `.wrangler/` (not committed). Changing the schema: add `migrations/0002_....sql`,
+then `npm run db:migrate:local` to apply it locally. `npm run deploy` applies it to the live database.
 
 ## Project layout
 
 ```
 src/
-  index.js    entry point (reads env, starts server)
-  server.js   HTTP server, cookies, static files
+  worker.js   Worker entry: cookies, request parsing, hands /api/* to api.js
   api.js      routes and the visibility rules (see present())
   amazon.js   reads Amazon wish lists, pasted links and saved pages for import
-  auth.js     password hashing (scrypt), sessions, invite codes
-  db.js       SQLite schema
+  auth.js     password hashing (PBKDF2 via Web Crypto), sessions, invite codes
+migrations/   D1 schema, one numbered SQL file per change
+scripts/      deploy.mjs: apply migrations, then deploy
 public/       single-page front end (plain HTML/CSS/JS, no build step; Lucide icons vendored in icons.js)
-test/         node:test API tests
+test/         node:test tests; helpers.js starts the Worker in Miniflare
+wrangler.jsonc  Cloudflare config (static assets, D1 binding)
 ```
 
 ## Ideas for later

@@ -1,32 +1,17 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { openDatabase } from '../src/db.js';
-import { createAppServer } from '../src/server.js';
+import { startApp, client as makeClient } from './helpers.js';
 
-let server;
+let app;
 let base;
 
 before(async () => {
-  server = createAppServer(openDatabase(':memory:'));
-  await new Promise((r) => server.listen(0, r));
-  base = `http://127.0.0.1:${server.address().port}`;
+  app = await startApp();
+  base = app.base;
 });
-after(() => server.close());
+after(() => app.close());
 
-/** A tiny client that keeps its own session cookie, like a separate browser. */
-function client() {
-  let cookie = '';
-  return async function call(method, path, body) {
-    const res = await fetch(base + path, {
-      method,
-      headers: { 'Content-Type': 'application/json', ...(cookie && { Cookie: cookie }) },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    const set = res.headers.get('set-cookie');
-    if (set) cookie = set.split(';')[0];
-    return { status: res.status, body: await res.json() };
-  };
-}
+const client = () => makeClient(base);
 
 let n = 0;
 async function signUp(name, inviteCode) {
@@ -164,4 +149,14 @@ test('auth and validation basics', async () => {
   assert.equal((await mom.call('POST', '/api/items', { title: '' })).status, 400);
   await mom.call('POST', '/api/logout', {});
   assert.equal((await mom.call('GET', '/api/me')).status, 401);
+});
+
+test('two people claiming at the same moment: exactly one wins', async () => {
+  const { mom, dad, kid } = await makeFamily();
+  const item = (await mom.call('POST', '/api/items', { title: 'Telescope' })).body.item;
+  const [a, b] = await Promise.all([
+    dad.call('PUT', `/api/items/${item.id}/claim`, {}),
+    kid.call('PUT', `/api/items/${item.id}/claim`, {}),
+  ]);
+  assert.deepEqual([a.status, b.status].sort(), [200, 409]);
 });

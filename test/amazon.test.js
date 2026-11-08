@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { openDatabase } from '../src/db.js';
-import { createAppServer } from '../src/server.js';
+import { startApp, client } from './helpers.js';
 import { importFromLinks, importFromWishlistUrl, parseWishlistPage } from '../src/amazon.js';
 
 // Markup modeled on Amazon's wish list pages (list view): one <li data-itemid> per item,
@@ -117,21 +116,9 @@ test('pasted links become items with readable titles', () => {
 
 test('import API: preview flags duplicates and saves nothing, import adds the chosen items', async () => {
   const { fetchImpl } = fakeAmazon(LIST_ROUTES);
-  const server = createAppServer(openDatabase(':memory:'), { fetchImpl });
-  await new Promise((r) => server.listen(0, r));
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const session = () => {
-    let cookie = '';
-    return async (method, path, body) => {
-      const res = await fetch(base + path, {
-        method,
-        headers: { 'Content-Type': 'application/json', ...(cookie && { Cookie: cookie }) },
-        body: body && JSON.stringify(body),
-      });
-      cookie = res.headers.get('set-cookie')?.split(';')[0] || cookie;
-      return { status: res.status, body: await res.json() };
-    };
-  };
+  // The Worker's outgoing requests to Amazon go to the fake instead.
+  const app = await startApp({ outbound: (req) => fetchImpl(req.url) });
+  const session = () => client(app.base);
   try {
     const me = session();
     await me('POST', '/api/signup', { name: 'Ana', email: 'ana@example.com', password: 'password123' });
@@ -169,6 +156,6 @@ test('import API: preview flags duplicates and saves nothing, import adds the ch
     const anon = session();
     assert.equal((await anon('POST', '/api/import/preview', { source: 'links', text: 'https://amazon.com/dp/B00006JSUA' })).status, 401);
   } finally {
-    server.close();
+    await app.close();
   }
 });

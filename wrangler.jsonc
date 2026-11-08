@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gift-wish",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+
+  // The web app (public/) is served as static files. Only /api/* runs the Worker.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  // On the first deploy, Wrangler creates a D1 database called "gift-wish" if
+  // there isn't one yet. Schema changes live in migrations/ (see npm run deploy).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gift-wish",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

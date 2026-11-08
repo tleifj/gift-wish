@@ -1,11 +1,4 @@
-import {
-  createSession,
-  destroySession,
-  hashPassword,
-  makeInviteCode,
-  userFromSession,
-  verifyPassword,
-} from './auth.js';
+import { createSession, destroySession, hashPassword, makeInviteCode, userFromSession, verifyPassword } from './auth.js';
 import { ImportError, importFromLinks, importFromSavedPage, importFromWishlistUrl } from './amazon.js';
 
 export class HttpError extends Error {
@@ -51,6 +44,16 @@ function priority(value) {
   return n;
 }
 
+function itemFields(body) {
+  return [
+    text(body.title, 'Title', { required: true, max: 200 }),
+    link(body.url),
+    text(body.price, 'Price', { max: 40 }),
+    text(body.notes, 'Notes', { max: 1000 }),
+    priority(body.priority),
+  ];
+}
+
 /**
  * Turns an item row into what `viewer` is allowed to see.
  *
@@ -89,172 +92,169 @@ const ITEM_SELECT = `
     LEFT JOIN users cu ON cu.id = c.user_id
 `;
 
-export function createApi(db, { fetchImpl = fetch } = {}) {
-  const q = {
-    userByEmail: db.prepare('SELECT * FROM users WHERE email = ?'),
-    userById: db.prepare('SELECT id, name, family_id FROM users WHERE id = ?'),
-    insertUser: db.prepare('INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)'),
-    familyById: db.prepare('SELECT * FROM families WHERE id = ?'),
-    familyByCode: db.prepare('SELECT * FROM families WHERE invite_code = ?'),
-    insertFamily: db.prepare('INSERT INTO families (name, invite_code) VALUES (?, ?)'),
-    setFamily: db.prepare('UPDATE users SET family_id = ? WHERE id = ?'),
-    members: db.prepare(
-      `SELECT u.id, u.name,
-              (SELECT COUNT(*) FROM items i WHERE i.owner_id = u.id AND i.deleted_at IS NULL) AS item_count
-         FROM users u WHERE u.family_id = ? ORDER BY u.name COLLATE NOCASE`
-    ),
-    itemRow: db.prepare(`${ITEM_SELECT} WHERE i.id = ?`),
-    // Owner sees only live items. Others also see removed items they had claimed,
-    // so they know not to buy it (or that they may want to return it).
-    listItems: db.prepare(
-      `${ITEM_SELECT}
-        WHERE i.owner_id = ?
-          AND (i.deleted_at IS NULL OR (c.user_id = ? AND i.owner_id <> ?))
-        ORDER BY i.deleted_at IS NOT NULL, i.priority, i.created_at`
-    ),
-    myClaims: db.prepare(
-      `${ITEM_SELECT}
-        JOIN users o ON o.id = i.owner_id
-        WHERE c.user_id = ? AND o.family_id = ?
-        ORDER BY o.name COLLATE NOCASE, c.status DESC, i.title COLLATE NOCASE`
-    ),
-    insertItem: db.prepare(
-      'INSERT INTO items (owner_id, title, url, price, notes, priority) VALUES (?, ?, ?, ?, ?, ?)'
-    ),
-    updateItem: db.prepare('UPDATE items SET title = ?, url = ?, price = ?, notes = ?, priority = ? WHERE id = ?'),
-    softDelete: db.prepare("UPDATE items SET deleted_at = datetime('now') WHERE id = ?"),
-    hardDelete: db.prepare('DELETE FROM items WHERE id = ?'),
-    upsertClaim: db.prepare(
-      `INSERT INTO claims (item_id, user_id, status) VALUES (?, ?, ?)
-       ON CONFLICT(item_id) DO UPDATE SET status = excluded.status, updated_at = datetime('now')`
-    ),
-    deleteClaim: db.prepare('DELETE FROM claims WHERE item_id = ?'),
-    ownerNames: db.prepare('SELECT id, name FROM users WHERE family_id = ?'),
-    myLiveItems: db.prepare('SELECT title, url FROM items WHERE owner_id = ? AND deleted_at IS NULL'),
+const SQL = {
+  userByEmail: 'SELECT * FROM users WHERE email = ?',
+  userById: 'SELECT id, name, family_id FROM users WHERE id = ?',
+  insertUser: 'INSERT INTO users (name, email, password_hash, family_id) VALUES (?, ?, ?, ?)',
+  familyById: 'SELECT * FROM families WHERE id = ?',
+  familyByCode: 'SELECT * FROM families WHERE invite_code = ?',
+  insertFamily: 'INSERT INTO families (name, invite_code) VALUES (?, ?)',
+  // Only joins if the person isn't in a family yet, so two quick requests can't both win.
+  setFamily: 'UPDATE users SET family_id = ? WHERE id = ? AND family_id IS NULL',
+  members: `SELECT u.id, u.name,
+                   (SELECT COUNT(*) FROM items i WHERE i.owner_id = u.id AND i.deleted_at IS NULL) AS item_count
+              FROM users u WHERE u.family_id = ? ORDER BY u.name COLLATE NOCASE`,
+  itemRow: `${ITEM_SELECT} WHERE i.id = ?`,
+  // Owner sees only live items. Others also see removed items they had claimed,
+  // so they know not to buy it (or that they may want to return it).
+  listItems: `${ITEM_SELECT}
+               WHERE i.owner_id = ?
+                 AND (i.deleted_at IS NULL OR (c.user_id = ? AND i.owner_id <> ?))
+               ORDER BY i.deleted_at IS NOT NULL, i.priority, i.created_at, i.id`,
+  myClaims: `${ITEM_SELECT}
+               JOIN users o ON o.id = i.owner_id
+              WHERE c.user_id = ? AND o.family_id = ?
+              ORDER BY o.name COLLATE NOCASE, c.status DESC, i.title COLLATE NOCASE`,
+  insertItem: 'INSERT INTO items (owner_id, title, url, price, notes, priority) VALUES (?, ?, ?, ?, ?, ?)',
+  updateItem: 'UPDATE items SET title = ?, url = ?, price = ?, notes = ?, priority = ? WHERE id = ?',
+  // Run together in one batch: keep a tombstone only if someone has claimed it.
+  softDeleteIfClaimed:
+    "UPDATE items SET deleted_at = datetime('now') WHERE id = ? AND EXISTS (SELECT 1 FROM claims WHERE item_id = items.id)",
+  hardDeleteIfUnclaimed: 'DELETE FROM items WHERE id = ? AND NOT EXISTS (SELECT 1 FROM claims WHERE item_id = items.id)',
+  // A single statement, so two people tapping at the same moment can't both get the item:
+  // it inserts a new claim, or updates one that already belongs to this person, or does nothing.
+  claim: `INSERT INTO claims (item_id, user_id, status) VALUES (?, ?, ?)
+          ON CONFLICT(item_id) DO UPDATE SET status = excluded.status, updated_at = datetime('now')
+          WHERE claims.user_id = excluded.user_id`,
+  releaseClaim: 'DELETE FROM claims WHERE item_id = ? AND user_id = ?',
+  deleteIfRemoved: 'DELETE FROM items WHERE id = ? AND deleted_at IS NOT NULL',
+  ownerNames: 'SELECT id, name FROM users WHERE family_id = ?',
+  myLiveItems: 'SELECT title, url FROM items WHERE owner_id = ? AND deleted_at IS NULL',
+};
+
+/** Thin async wrapper over a D1 binding. */
+function wrap(d1) {
+  const stmt = (sql, args) => d1.prepare(sql).bind(...args);
+  return {
+    stmt: (sql, ...args) => stmt(sql, args),
+    get: (sql, ...args) => stmt(sql, args).first(),
+    all: async (sql, ...args) => (await stmt(sql, args).all()).results,
+    run: async (sql, ...args) => (await stmt(sql, args).run()).meta,
+    batch: (stmts) => d1.batch(stmts),
   };
+}
 
-  function itemFields(body) {
-    return [
-      text(body.title, 'Title', { required: true, max: 200 }),
-      link(body.url),
-      text(body.price, 'Price', { max: 40 }),
-      text(body.notes, 'Notes', { max: 1000 }),
-      priority(body.priority),
-    ];
-  }
+export function createApi(d1) {
+  const db = wrap(d1);
 
-  function requireUser(ctx) {
-    const user = userFromSession(db, ctx.token);
+  async function requireUser(ctx) {
+    const user = await userFromSession(db, ctx.token);
     if (!user) fail(401, 'Please sign in');
     return user;
   }
 
-  function requireFamily(ctx) {
-    const user = requireUser(ctx);
+  async function requireFamily(ctx) {
+    const user = await requireUser(ctx);
     if (!user.family_id) fail(403, 'Create or join a family first');
     return user;
   }
 
-  /** Loads an item that the viewer is allowed to act on (same family, still visible). */
-  function loadItem(viewer, id) {
-    const row = q.itemRow.get(Number(id));
+  /** Loads an item that the viewer is allowed to act on (same family). */
+  async function loadItem(viewer, id) {
+    const row = await db.get(SQL.itemRow, Number(id) || 0);
     if (!row) fail(404, 'Item not found');
-    const owner = q.userById.get(row.owner_id);
+    const owner = await db.get(SQL.userById, row.owner_id);
     if (!owner || owner.family_id !== viewer.family_id) fail(404, 'Item not found');
     return row;
   }
 
-  function loadOthersItem(viewer, id) {
-    const row = loadItem(viewer, id);
-    if (row.owner_id === viewer.id) fail(403, "No peeking! You can't claim items on your own list.");
-    if (row.deleted_at) fail(410, 'This item was removed from the list');
-    return row;
-  }
-
-  function newFamily(name) {
+  async function newFamily(name) {
     for (let i = 0; i < 5; i++) {
       const code = makeInviteCode();
-      if (!q.familyByCode.get(code)) {
-        const { lastInsertRowid } = q.insertFamily.run(name, code);
-        return Number(lastInsertRowid);
+      if (!(await db.get(SQL.familyByCode, code))) {
+        return (await db.run(SQL.insertFamily, name, code)).last_row_id;
       }
     }
     fail(500, 'Could not generate an invite code, please try again');
   }
 
   const routes = {
-    'POST /api/signup': (ctx) => {
+    'POST /api/signup': async (ctx) => {
       const name = text(ctx.body.name, 'Name', { required: true, max: 60 });
       const email = text(ctx.body.email, 'Email', { required: true, max: 200 }).toLowerCase();
       const password = ctx.body.password;
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail(400, 'Please enter a valid email');
       if (typeof password !== 'string' || password.length < 8) fail(400, 'Password must be at least 8 characters');
-      if (q.userByEmail.get(email)) fail(409, 'An account with that email already exists');
-      const { lastInsertRowid } = q.insertUser.run(name, email, hashPassword(password));
-      const userId = Number(lastInsertRowid);
+      if (password.length > 200) fail(400, 'Password is too long');
+      if (await db.get(SQL.userByEmail, email)) fail(409, 'An account with that email already exists');
 
       const code = typeof ctx.body.inviteCode === 'string' ? ctx.body.inviteCode.trim().toUpperCase() : '';
-      if (code) {
-        const family = q.familyByCode.get(code);
-        if (family) q.setFamily.run(family.id, userId);
+      const family = code ? await db.get(SQL.familyByCode, code) : null;
+      let userId;
+      try {
+        userId = (await db.run(SQL.insertUser, name, email, await hashPassword(password), family?.id ?? null)).last_row_id;
+      } catch (err) {
+        if (/UNIQUE/i.test(String(err?.message))) fail(409, 'An account with that email already exists');
+        throw err;
       }
-      ctx.setSession(createSession(db, userId));
+      ctx.setSession(await createSession(db, userId));
       return { status: 201, body: { ok: true } };
     },
 
-    'POST /api/login': (ctx) => {
+    'POST /api/login': async (ctx) => {
       const email = String(ctx.body.email || '').trim().toLowerCase();
-      const user = q.userByEmail.get(email);
-      if (!user || !verifyPassword(String(ctx.body.password || ''), user.password_hash)) {
+      const user = await db.get(SQL.userByEmail, email);
+      if (!user || !(await verifyPassword(String(ctx.body.password || ''), user.password_hash))) {
         fail(401, 'Wrong email or password');
       }
-      ctx.setSession(createSession(db, user.id));
+      ctx.setSession(await createSession(db, user.id));
       return { body: { ok: true } };
     },
 
-    'POST /api/logout': (ctx) => {
-      destroySession(db, ctx.token);
+    'POST /api/logout': async (ctx) => {
+      await destroySession(db, ctx.token);
       ctx.clearSession();
       return { body: { ok: true } };
     },
 
-    'GET /api/me': (ctx) => {
-      const user = requireUser(ctx);
-      const family = user.family_id ? q.familyById.get(user.family_id) : null;
+    'GET /api/me': async (ctx) => {
+      const user = await requireUser(ctx);
+      const family = user.family_id ? await db.get(SQL.familyById, user.family_id) : null;
+      const members = family ? await db.all(SQL.members, family.id) : [];
       return {
         body: {
           user: { id: user.id, name: user.name, email: user.email },
           family: family ? { id: family.id, name: family.name, inviteCode: family.invite_code } : null,
-          members: family
-            ? q.members.all(family.id).map((m) => ({ id: m.id, name: m.name, itemCount: m.item_count }))
-            : [],
+          members: members.map((m) => ({ id: m.id, name: m.name, itemCount: m.item_count })),
         },
       };
     },
 
-    'POST /api/families': (ctx) => {
-      const user = requireUser(ctx);
+    'POST /api/families': async (ctx) => {
+      const user = await requireUser(ctx);
       if (user.family_id) fail(409, "You're already in a family");
       const name = text(ctx.body.name, 'Family name', { required: true, max: 80 });
-      q.setFamily.run(newFamily(name), user.id);
+      const { changes } = await db.run(SQL.setFamily, await newFamily(name), user.id);
+      if (!changes) fail(409, "You're already in a family");
       return { status: 201, body: { ok: true } };
     },
 
-    'POST /api/families/join': (ctx) => {
-      const user = requireUser(ctx);
+    'POST /api/families/join': async (ctx) => {
+      const user = await requireUser(ctx);
       if (user.family_id) fail(409, "You're already in a family");
       const code = String(ctx.body.code || '').trim().toUpperCase();
-      const family = q.familyByCode.get(code);
+      const family = await db.get(SQL.familyByCode, code);
       if (!family) fail(404, "That invite code doesn't match any family");
-      q.setFamily.run(family.id, user.id);
+      const { changes } = await db.run(SQL.setFamily, family.id, user.id);
+      if (!changes) fail(409, "You're already in a family");
       return { body: { ok: true } };
     },
 
-    'GET /api/lists/:userId': (ctx) => {
-      const viewer = requireFamily(ctx);
-      const owner = q.userById.get(Number(ctx.params.userId));
+    'GET /api/lists/:userId': async (ctx) => {
+      const viewer = await requireFamily(ctx);
+      const owner = await db.get(SQL.userById, Number(ctx.params.userId) || 0);
       if (!owner || owner.family_id !== viewer.family_id) fail(404, 'List not found');
-      const rows = q.listItems.all(owner.id, viewer.id, viewer.id);
+      const rows = await db.all(SQL.listItems, owner.id, viewer.id, viewer.id);
       return {
         body: {
           owner: { id: owner.id, name: owner.name },
@@ -264,48 +264,45 @@ export function createApi(db, { fetchImpl = fetch } = {}) {
       };
     },
 
-    'GET /api/claims': (ctx) => {
-      const viewer = requireFamily(ctx);
-      const names = new Map(q.ownerNames.all(viewer.family_id).map((u) => [u.id, u.name]));
-      const items = q.myClaims
-        .all(viewer.id, viewer.family_id)
-        .map((r) => ({ ...present(r, viewer), ownerName: names.get(r.owner_id) }));
-      return { body: { items } };
+    'GET /api/claims': async (ctx) => {
+      const viewer = await requireFamily(ctx);
+      const names = new Map((await db.all(SQL.ownerNames, viewer.family_id)).map((u) => [u.id, u.name]));
+      const rows = await db.all(SQL.myClaims, viewer.id, viewer.family_id);
+      return { body: { items: rows.map((r) => ({ ...present(r, viewer), ownerName: names.get(r.owner_id) })) } };
     },
 
-    'POST /api/items': (ctx) => {
-      const user = requireFamily(ctx);
-      const { lastInsertRowid } = q.insertItem.run(user.id, ...itemFields(ctx.body));
-      return { status: 201, body: { item: present(q.itemRow.get(Number(lastInsertRowid)), user) } };
+    'POST /api/items': async (ctx) => {
+      const user = await requireFamily(ctx);
+      const { last_row_id } = await db.run(SQL.insertItem, user.id, ...itemFields(ctx.body));
+      return { status: 201, body: { item: present(await db.get(SQL.itemRow, last_row_id), user) } };
     },
 
-    'PUT /api/items/:id': (ctx) => {
-      const user = requireFamily(ctx);
-      const row = loadItem(user, ctx.params.id);
+    'PUT /api/items/:id': async (ctx) => {
+      const user = await requireFamily(ctx);
+      const row = await loadItem(user, ctx.params.id);
       if (row.owner_id !== user.id || row.deleted_at) fail(404, 'Item not found');
-      q.updateItem.run(...itemFields(ctx.body), row.id);
-      return { body: { item: present(q.itemRow.get(row.id), user) } };
+      await db.run(SQL.updateItem, ...itemFields(ctx.body), row.id);
+      return { body: { item: present(await db.get(SQL.itemRow, row.id), user) } };
     },
 
-    'DELETE /api/items/:id': (ctx) => {
-      const user = requireFamily(ctx);
-      const row = loadItem(user, ctx.params.id);
+    'DELETE /api/items/:id': async (ctx) => {
+      const user = await requireFamily(ctx);
+      const row = await loadItem(user, ctx.params.id);
       if (row.owner_id !== user.id || row.deleted_at) fail(404, 'Item not found');
       // If someone already claimed it, keep a tombstone so they get told it was removed.
       // The response is identical either way, so the owner learns nothing.
-      if (row.claim_status) q.softDelete.run(row.id);
-      else q.hardDelete.run(row.id);
+      await db.batch([db.stmt(SQL.softDeleteIfClaimed, row.id), db.stmt(SQL.hardDeleteIfUnclaimed, row.id)]);
       return { body: { ok: true } };
     },
 
     // Reads items from an Amazon wish list (or pasted links / a saved page) for review.
     // Nothing is saved here; the person picks what to keep, then calls /api/items/import.
     'POST /api/import/preview': async (ctx) => {
-      const user = requireFamily(ctx);
+      const user = await requireFamily(ctx);
       const { source } = ctx.body;
       let result;
       try {
-        if (source === 'wishlist') result = await importFromWishlistUrl(ctx.body.url, { fetchImpl });
+        if (source === 'wishlist') result = await importFromWishlistUrl(ctx.body.url);
         else if (source === 'links') result = importFromLinks(ctx.body.text);
         else if (source === 'file') result = importFromSavedPage(ctx.body.html);
         else fail(400, 'Unknown import type');
@@ -313,7 +310,7 @@ export function createApi(db, { fetchImpl = fetch } = {}) {
         if (err instanceof ImportError) fail(err.status, err.message);
         throw err;
       }
-      const existing = q.myLiveItems.all(user.id);
+      const existing = await db.all(SQL.myLiveItems, user.id);
       const urls = new Set(existing.map((i) => i.url).filter(Boolean));
       const titles = new Set(existing.map((i) => i.title.toLowerCase()));
       return {
@@ -321,14 +318,14 @@ export function createApi(db, { fetchImpl = fetch } = {}) {
           listName: result.listName,
           items: result.items.map((i) => ({
             ...i,
-            alreadyOnList: (i.url && urls.has(i.url)) || titles.has(i.title.toLowerCase()),
+            alreadyOnList: Boolean((i.url && urls.has(i.url)) || titles.has(i.title.toLowerCase())),
           })),
         },
       };
     },
 
-    'POST /api/items/import': (ctx) => {
-      const user = requireFamily(ctx);
+    'POST /api/items/import': async (ctx) => {
+      const user = await requireFamily(ctx);
       const list = ctx.body.items;
       if (!Array.isArray(list) || !list.length) fail(400, 'Choose at least one item to add');
       if (list.length > 300) fail(400, 'You can add up to 300 items at a time');
@@ -340,55 +337,48 @@ export function createApi(db, { fetchImpl = fetch } = {}) {
           throw err;
         }
       });
-      db.exec('BEGIN');
-      try {
-        for (const r of rows) q.insertItem.run(user.id, ...r);
-        db.exec('COMMIT');
-      } catch (err) {
-        db.exec('ROLLBACK');
-        throw err;
-      }
+      // A D1 batch runs as one transaction: all rows are added, or none.
+      await db.batch(rows.map((r) => db.stmt(SQL.insertItem, user.id, ...r)));
       return { status: 201, body: { added: rows.length } };
     },
 
     // Mark "I'm getting this" (status = claimed) or "I bought it" (status = purchased).
-    'PUT /api/items/:id/claim': (ctx) => {
-      const user = requireFamily(ctx);
-      const row = loadOthersItem(user, ctx.params.id);
+    'PUT /api/items/:id/claim': async (ctx) => {
+      const user = await requireFamily(ctx);
+      const row = await loadItem(user, ctx.params.id);
+      if (row.owner_id === user.id) fail(403, "No peeking! You can't claim items on your own list.");
+      if (row.deleted_at) fail(410, 'This item was removed from the list');
       const status = ctx.body.status ?? 'claimed';
       if (status !== 'claimed' && status !== 'purchased') fail(400, 'Status must be "claimed" or "purchased"');
-      if (row.claim_user_id && row.claim_user_id !== user.id) {
-        fail(409, `${row.claim_user_name} is already getting this`);
-      }
-      q.upsertClaim.run(row.id, user.id, status);
-      return { body: { item: present(q.itemRow.get(row.id), user) } };
+      const { changes } = await db.run(SQL.claim, row.id, user.id, status);
+      const now = await db.get(SQL.itemRow, row.id);
+      if (!changes) fail(409, `${now?.claim_user_name ?? 'Someone'} is already getting this`);
+      return { body: { item: present(now, user) } };
     },
 
-    'DELETE /api/items/:id/claim': (ctx) => {
-      const user = requireFamily(ctx);
-      const row = loadItem(user, ctx.params.id);
+    'DELETE /api/items/:id/claim': async (ctx) => {
+      const user = await requireFamily(ctx);
+      const row = await loadItem(user, ctx.params.id);
       if (row.owner_id === user.id) fail(403, "No peeking! You can't change claims on your own list.");
-      if (row.claim_user_id !== user.id) fail(403, 'Only the person who claimed this can release it');
-      q.deleteClaim.run(row.id);
+      const { changes } = await db.run(SQL.releaseClaim, row.id, user.id);
+      if (!changes) fail(403, 'Only the person who claimed this can release it');
       // Clean up a removed item once nobody is holding it any more.
       if (row.deleted_at) {
-        q.hardDelete.run(row.id);
+        await db.run(SQL.deleteIfRemoved, row.id);
         return { body: { item: null } };
       }
-      return { body: { item: present(q.itemRow.get(row.id), user) } };
+      return { body: { item: present(await db.get(SQL.itemRow, row.id), user) } };
     },
   };
 
   const compiled = Object.entries(routes).map(([key, handler]) => {
     const [method, path] = key.split(' ');
     const names = [];
-    const pattern = new RegExp(
-      '^' + path.replace(/:(\w+)/g, (_, n) => (names.push(n), '([^/]+)')) + '$'
-    );
+    const pattern = new RegExp('^' + path.replace(/:(\w+)/g, (_, n) => (names.push(n), '([^/]+)')) + '$');
     return { method, pattern, names, handler };
   });
 
-  return function handle(ctx) {
+  return async function handle(ctx) {
     for (const r of compiled) {
       if (r.method !== ctx.method) continue;
       const m = r.pattern.exec(ctx.path);
