@@ -47,7 +47,8 @@ The app runs on **Cloudflare Workers** with a **D1** database (Cloudflare's host
    npm run deploy
    ```
    (The default, `npx wrangler deploy`, would skip the database migrations.)
-3. Deploy. On the first deploy, Wrangler creates the `gift-wish` D1 database and the tables.
+3. Deploy. The deploy command creates any missing tables in the `gift-wish` D1 database (its ID is in
+   `wrangler.jsonc`), then deploys the code.
    After that, every push to the branch redeploys the app and keeps the data.
 
 Your family can then use the `*.workers.dev` address Cloudflare shows, or you can add your own domain
