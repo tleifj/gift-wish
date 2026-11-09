@@ -118,6 +118,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn.ghost { background: transparent; }
+.btn.danger { background: var(--warn); color: var(--accent-ink); border-color: var(--warn); }
+.btn.danger:hover { filter: brightness(1.08); border-color: var(--warn); }
 .btn.small { padding: 6px 12px; font-size: 0.85rem; }
 .link-btn { background: none; border: none; color: var(--accent); cursor: pointer; font: inherit; padding: 0; display: inline-flex; align-items: center; gap: 6px; }
 
@@ -251,10 +253,39 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .pick .badge { margin-top: 0; }
 input[type=file] { padding: 8px; }
 
+/* ---------- confirm dialog ---------- */
+.confirm {
+  width: min(400px, calc(100% - 32px));
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 24px 64px rgb(20 30 22 / 0.28);
+}
+.confirm::backdrop { background: rgb(20 30 22 / 0.45); backdrop-filter: blur(2px); }
+.confirm form { display: grid; gap: 10px; justify-items: start; padding: 24px; }
+.confirm h2 { margin: 6px 0 0; font-size: 1.15rem; text-wrap: balance; overflow-wrap: anywhere; }
+.confirm p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+.confirm-icon {
+  display: grid; place-items: center; width: 44px; height: 44px;
+  border-radius: 999px; background: var(--warn-soft); color: var(--warn);
+}
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; width: 100%; margin-top: 12px; }
+.confirm[open] { animation: confirm-in 160ms ease-out; }
+.confirm[open]::backdrop { animation: fade-in 160ms ease-out; }
+@keyframes confirm-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
+@keyframes fade-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .confirm[open], .confirm[open]::backdrop { animation: none; }
+}
+
 @media (max-width: 560px) {
   .item { flex-direction: column; }
   .actions { flex-direction: row; flex-wrap: wrap; }
   .row { grid-template-columns: 1fr; }
   .segmented { flex-direction: column; border-radius: 14px; }
   .seg { border-radius: 10px; }
+  .confirm-actions { flex-direction: column-reverse; }
+  .confirm-actions .btn { width: 100%; }
 }

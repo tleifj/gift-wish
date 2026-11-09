@@ -16,6 +16,17 @@
     </header>
     <main id="app" aria-live="polite"></main>
     <div id="toast" class="toast" role="status" hidden></div>
+    <dialog id="confirm" class="confirm" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+      <form method="dialog">
+        <div class="confirm-icon" aria-hidden="true"></div>
+        <h2 id="confirm-title"></h2>
+        <p id="confirm-message"></p>
+        <div class="confirm-actions">
+          <button class="btn ghost" value="cancel" autofocus>Cancel</button>
+          <button class="btn danger" value="confirm" id="confirm-ok"></button>
+        </div>
+      </form>
+    </dialog>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

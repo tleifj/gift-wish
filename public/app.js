@@ -36,6 +36,37 @@ function toast(msg, isError = false) {
   toast.t = setTimeout(() => (toastEl.hidden = true), 3200);
 }
 
+/**
+ * A styled replacement for window.confirm(). Resolves true only if the person
+ * picks the confirm button; Cancel, Esc and clicking outside all resolve false.
+ */
+function confirmDialog({ title, message = '', confirmLabel = 'Confirm', icon: iconName = 'trash-2' }) {
+  const dlg = document.getElementById('confirm');
+  if (typeof dlg?.showModal !== 'function') return Promise.resolve(window.confirm(title));
+  dlg.querySelector('.confirm-icon').innerHTML = icon(iconName, { size: 22 });
+  dlg.querySelector('#confirm-title').textContent = title;
+  dlg.querySelector('#confirm-message').textContent = message;
+  dlg.querySelector('#confirm-message').hidden = !message;
+  dlg.querySelector('#confirm-ok').innerHTML = `${icon(iconName, { size: 16 })}${confirmLabel}`;
+  dlg.returnValue = '';
+  dlg.showModal();
+  return new Promise((resolve) => {
+    // A click on the dialog element itself (not its contents) is a click on the backdrop.
+    const onBackdrop = (e) => {
+      if (e.target === dlg) dlg.close('cancel');
+    };
+    dlg.addEventListener('click', onBackdrop);
+    dlg.addEventListener(
+      'close',
+      () => {
+        dlg.removeEventListener('click', onBackdrop);
+        resolve(dlg.returnValue === 'confirm');
+      },
+      { once: true }
+    );
+  });
+}
+
 function formData(form) {
   return Object.fromEntries(new FormData(form).entries());
 }
@@ -490,7 +521,15 @@ async function onItemAction(action, id, items, owner) {
       case 'edit':
         return openEditor(item);
       case 'delete':
-        if (!confirm(`Remove “${item.title}” from your list?`)) return;
+        if (
+          !(await confirmDialog({
+            title: `Remove “${item.title}”?`,
+            message: 'It will come off your wish list. This can’t be undone.',
+            confirmLabel: 'Remove',
+          }))
+        ) {
+          return;
+        }
         await api('DELETE', `/api/items/${id}`);
         toast('Removed');
         break;
