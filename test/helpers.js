@@ -45,7 +45,7 @@ export function client(base) {
   return async function call(method, path, body) {
     const res = await fetch(base + path, {
       method,
-      headers: { 'Content-Type': 'application/json', ...(cookie && { Cookie: cookie }) },
+      headers: { ...(body !== undefined && { 'Content-Type': 'application/json' }), ...(cookie && { Cookie: cookie }) },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const set = res.headers.get('set-cookie');

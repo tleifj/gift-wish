@@ -160,3 +160,17 @@ test('two people claiming at the same moment: exactly one wins', async () => {
   ]);
   assert.deepEqual([a.status, b.status].sort(), [200, 409]);
 });
+
+test('changes must be JSON, except an empty DELETE', async () => {
+  const { mom } = await makeFamily();
+  const item = (await mom.call('POST', '/api/items', { title: 'Mittens' })).body.item;
+  // A cross-site HTML form posts as form data; that must be refused.
+  const form = await fetch(`${base}/api/items`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'title=hax',
+  });
+  assert.equal(form.status, 415);
+  // Removing an item sends no body at all, like the app's Remove button.
+  assert.equal((await mom.call('DELETE', `/api/items/${item.id}`)).status, 200);
+});

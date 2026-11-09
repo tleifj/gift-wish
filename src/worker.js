@@ -63,10 +63,15 @@ export default {
 
       if (request.method !== 'GET' && request.method !== 'HEAD') {
         // Basic CSRF protection: state-changing calls must be JSON, which a
-        // cross-site HTML form cannot send without a CORS preflight.
+        // cross-site HTML form cannot send without a CORS preflight. A DELETE with
+        // no body is fine without it: forms can't send DELETE, and cross-site
+        // scripts can't either without a preflight.
         const type = request.headers.get('content-type') || '';
-        if (!type.startsWith('application/json')) throw new HttpError(415, 'Expected JSON');
-        ctx.body = await readJson(request, url.pathname === '/api/import/preview' ? MAX_IMPORT_BODY : MAX_BODY);
+        const emptyDelete = request.method === 'DELETE' && !Number(request.headers.get('content-length'));
+        if (!type.startsWith('application/json') && !emptyDelete) throw new HttpError(415, 'Expected JSON');
+        if (!emptyDelete) {
+          ctx.body = await readJson(request, url.pathname === '/api/import/preview' ? MAX_IMPORT_BODY : MAX_BODY);
+        }
       }
 
       const result = await createApi(env.DB)(ctx);

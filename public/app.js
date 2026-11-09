@@ -11,10 +11,13 @@ const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 async function api(method, path, body) {
+  // Every change (POST/PUT/DELETE) is sent as JSON, even with nothing to send:
+  // the server only accepts JSON for changes, as protection against cross-site forms.
+  const sendsJson = method !== 'GET';
   const res = await fetch(path, {
     method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    headers: sendsJson ? { 'Content-Type': 'application/json' } : {},
+    body: sendsJson ? JSON.stringify(body ?? {}) : undefined,
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
