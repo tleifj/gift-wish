@@ -45,6 +45,20 @@
 
 * { box-sizing: border-box; }
 
+/* Behave like an app on phones: no double-tap or pinch zoom, no automatic text
+   enlarging, and no sideways scrolling or rubber-banding. */
+html {
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+html, body {
+  overflow-x: clip;
+  overscroll-behavior-x: none;
+}
+/* Keep the page still behind an open dialog. */
+body:has(dialog[open]) { overflow: hidden; }
+
 body {
   margin: 0;
   font: 16px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
@@ -87,6 +101,8 @@ form { display: grid; gap: 14px; }
 label { display: grid; gap: 4px; font-size: 0.9rem; font-weight: 600; }
 input, select, textarea {
   font: inherit;
+  /* 16px exactly: iOS zooms into any field smaller than this when it's tapped. */
+  font-size: 16px;
   font-weight: 400;
   padding: 10px 12px;
   border: 1px solid var(--border);
