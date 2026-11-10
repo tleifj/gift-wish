@@ -81,6 +81,15 @@ function hostOf(url) {
   }
 }
 
+/**
+ * Prices are free text. Plain amounts get a dollar sign ("24" -> "$24", "25-30" -> "$25-30");
+ * anything that already names a currency ("$24.95", "£20", "20 EUR") is shown as typed.
+ */
+function formatPrice(price) {
+  const p = String(price ?? '').trim();
+  return /^\d[\d.,\s\-–~+]*$/.test(p) ? `$${p}` : p;
+}
+
 const PRIORITY = { 1: 'Most wanted', 2: 'Would like', 3: 'Nice to have' };
 
 // ---------- routing ----------
@@ -447,7 +456,7 @@ function itemHtml(item, isMine) {
         <span class="prio p${item.priority}">${PRIORITY[item.priority]}</span>
       </div>
       <div class="meta">
-        ${item.price ? `<span>${esc(item.price)}</span>` : ''}
+        ${item.price ? `<span class="price">${esc(formatPrice(item.price))}</span>` : ''}
         ${item.url ? `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${icon('external-link', { size: 14 })}${esc(hostOf(item.url))}</a>` : ''}
       </div>
       ${item.notes ? `<p class="notes">${esc(item.notes)}</p>` : ''}
@@ -546,7 +555,7 @@ function renderImportPreview({ listName, items }) {
               <div class="pick-main">
                 <input class="pick-title" data-n="${n}" value="${esc(it.title)}" maxlength="200" aria-label="Name" />
                 <div class="meta">
-                  ${it.price ? `<span>${esc(it.price)}</span>` : ''}
+                  ${it.price ? `<span class="price">${esc(formatPrice(it.price))}</span>` : ''}
                   ${it.url ? `<a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">${icon('external-link', { size: 14 })}${esc(hostOf(it.url))}</a>` : ''}
                   ${it.priority !== 2 ? `<span class="prio p${it.priority}">${PRIORITY[it.priority]}</span>` : ''}
                   ${it.alreadyOnList ? '<span class="badge warn">Already on your list</span>' : ''}
@@ -607,7 +616,10 @@ function openEditor(item) {
       <label>What is it?<input name="title" required maxlength="200" value="${esc(item?.title)}" placeholder="Wool hiking socks, size M" /></label>
       <label>Where to buy (link)<input name="url" inputmode="url" maxlength="2000" value="${esc(item?.url)}" placeholder="https://…" /></label>
       <div class="row">
-        <label>Price<input name="price" maxlength="40" value="${esc(item?.price)}" placeholder="$25" /></label>
+        <label>Price
+          <span class="money"><span class="money-sign" aria-hidden="true">$</span><input name="price" maxlength="40"
+            inputmode="decimal" value="${esc(item?.price?.replace(/^\$\s*/, ''))}" placeholder="25" /></span>
+        </label>
         <label>How much do you want it?
           <select name="priority">
             ${[1, 2, 3].map((p) => `<option value="${p}" ${(item?.priority ?? 2) === p ? 'selected' : ''}>${PRIORITY[p]}</option>`).join('')}

@@ -269,6 +269,15 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .pick .badge { margin-top: 0; }
 input[type=file] { padding: 8px; }
 
+/* ---------- prices ---------- */
+.price { font-variant-numeric: tabular-nums; }
+.money { position: relative; display: block; }
+.money-sign {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  color: var(--muted); font-weight: 400; pointer-events: none;
+}
+.money input { padding-left: 26px; }
+
 /* ---------- members & password reset ---------- */
 .members li { align-items: center; gap: 12px; flex-wrap: wrap; }
 .member-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
