@@ -36,7 +36,7 @@ export async function startApp({ outbound } = {}) {
   const url = await mf.ready;
   const db = await mf.getD1Database('DB');
   for (const sql of migrationStatements()) await db.prepare(sql).run();
-  return { base: url.href.replace(/\/$/, ''), close: () => mf.dispose() };
+  return { base: url.href.replace(/\/$/, ''), db, close: () => mf.dispose() };
 }
 
 /** A tiny client that keeps its own session cookie, like a separate browser. */

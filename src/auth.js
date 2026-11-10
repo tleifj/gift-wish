@@ -37,8 +37,18 @@ export async function verifyPassword(password, stored) {
   return diff === 0;
 }
 
+/** A random, URL-safe secret (256 bits). */
+export function randomToken() {
+  return base64url(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+/** Hex SHA-256, used to store reset-link secrets without storing the secrets themselves. */
+export async function sha256Hex(text) {
+  return toHex(await crypto.subtle.digest('SHA-256', enc.encode(text)));
+}
+
 export async function createSession(db, userId) {
-  const token = base64url(crypto.getRandomValues(new Uint8Array(32)));
+  const token = randomToken();
   const expires = new Date(Date.now() + SESSION_DAYS * 864e5).toISOString();
   await db.run('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)', token, userId, expires);
   return { token, maxAge: SESSION_DAYS * 86400 };
@@ -57,6 +67,11 @@ export function userFromSession(db, token) {
 
 export async function destroySession(db, token) {
   if (token) await db.run('DELETE FROM sessions WHERE token = ?', token);
+}
+
+/** Signs a person out on every device. */
+export async function destroyAllSessions(db, userId) {
+  await db.run('DELETE FROM sessions WHERE user_id = ?', userId);
 }
 
 // Human-friendly invite codes: no 0/O/1/I confusion.

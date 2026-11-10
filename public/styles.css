@@ -269,6 +269,20 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .pick .badge { margin-top: 0; }
 input[type=file] { padding: 8px; }
 
+/* ---------- members & password reset ---------- */
+.members li { align-items: center; gap: 12px; flex-wrap: wrap; }
+.member-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.member-side { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+.badge.organizer { background: var(--accent-soft); color: var(--accent); margin-top: 0; }
+.member-help { margin-top: 14px; }
+.forgot { margin-top: 14px; font-size: 0.9rem; }
+.forgot summary { cursor: pointer; color: var(--accent); font-weight: 600; width: fit-content; }
+.forgot p { margin: 8px 0 0; color: var(--muted); }
+.link-field { width: 100%; color: var(--muted); }
+.confirm-icon.ok { background: var(--accent-soft); color: var(--accent); }
+.card.narrow > .confirm-icon { margin-bottom: 4px; }
+.card.narrow > .btn { margin-top: 8px; text-decoration: none; }
+
 /* ---------- confirm dialog ---------- */
 .confirm {
   width: min(400px, calc(100% - 32px));

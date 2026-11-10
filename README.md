@@ -26,6 +26,11 @@ Details:
   anything, and only then are they added. Items already on your list are unchecked. If Amazon blocks the
   request (it sometimes shows a robot check to servers), paste product links instead, or save the wish list
   page from your browser and upload it.
+- **Forgotten passwords.** Whoever creates a family is its **organizer**. On the Family page they get a
+  *Reset password* button next to each member, which makes a one-time link (valid 24 hours) to send by text
+  or chat. Opening it lets that person choose a new password and signs them out everywhere else. Only a hash
+  of the link's secret is stored, and the secret sits after `#` in the link, so it never reaches server logs.
+  The organizer could use this to sign in as someone else, so pick an organizer the family trusts.
 - **Families.** Create a family and share the invite link (`/?invite=CODE`) or code. Each family can
   only see its own members' lists.
 

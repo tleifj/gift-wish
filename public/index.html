@@ -16,6 +16,19 @@
     </header>
     <main id="app" aria-live="polite"></main>
     <div id="toast" class="toast" role="status" hidden></div>
+    <dialog id="reset-link" class="confirm" aria-labelledby="reset-link-title">
+      <form method="dialog">
+        <div class="confirm-icon ok" aria-hidden="true"></div>
+        <h2 id="reset-link-title"></h2>
+        <p id="reset-link-help"></p>
+        <input id="reset-link-url" class="link-field" readonly aria-label="Reset link" />
+        <div class="confirm-actions">
+          <button class="btn ghost" value="close">Done</button>
+          <button type="button" class="btn" id="reset-link-share" hidden></button>
+          <button type="button" class="btn primary" id="reset-link-copy"></button>
+        </div>
+      </form>
+    </dialog>
     <dialog id="confirm" class="confirm" aria-labelledby="confirm-title" aria-describedby="confirm-message">
       <form method="dialog">
         <div class="confirm-icon" aria-hidden="true"></div>

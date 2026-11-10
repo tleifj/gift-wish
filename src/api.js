@@ -1,4 +1,16 @@
-import { createSession, destroySession, hashPassword, makeInviteCode, userFromSession, verifyPassword } from './auth.js';
+import {
+  createSession,
+  destroyAllSessions,
+  destroySession,
+  hashPassword,
+  makeInviteCode,
+  randomToken,
+  sha256Hex,
+  userFromSession,
+  verifyPassword,
+} from './auth.js';
+
+const RESET_LINK_HOURS = 24;
 import { ImportError, importFromLinks, importFromSavedPage, importFromWishlistUrl } from './amazon.js';
 
 export class HttpError extends Error {
@@ -42,6 +54,12 @@ function priority(value) {
   const n = Number(value);
   if (![1, 2, 3].includes(n)) fail(400, 'Priority must be 1, 2 or 3');
   return n;
+}
+
+function newPassword(value) {
+  if (typeof value !== 'string' || value.length < 8) fail(400, 'Password must be at least 8 characters');
+  if (value.length > 200) fail(400, 'Password is too long');
+  return value;
 }
 
 function itemFields(body) {
@@ -98,7 +116,7 @@ const SQL = {
   insertUser: 'INSERT INTO users (name, email, password_hash, family_id) VALUES (?, ?, ?, ?)',
   familyById: 'SELECT * FROM families WHERE id = ?',
   familyByCode: 'SELECT * FROM families WHERE invite_code = ?',
-  insertFamily: 'INSERT INTO families (name, invite_code) VALUES (?, ?)',
+  insertFamily: 'INSERT INTO families (name, invite_code, organizer_id) VALUES (?, ?, ?)',
   // Only joins if the person isn't in a family yet, so two quick requests can't both win.
   setFamily: 'UPDATE users SET family_id = ? WHERE id = ? AND family_id IS NULL',
   members: `SELECT u.id, u.name,
@@ -130,6 +148,16 @@ const SQL = {
   deleteIfRemoved: 'DELETE FROM items WHERE id = ? AND deleted_at IS NOT NULL',
   ownerNames: 'SELECT id, name FROM users WHERE family_id = ?',
   myLiveItems: 'SELECT title, url FROM items WHERE owner_id = ? AND deleted_at IS NULL',
+  // Creating a new reset link cancels any earlier unused one for that person.
+  cancelResetLinks: 'DELETE FROM password_resets WHERE user_id = ? AND used_at IS NULL',
+  insertResetLink: 'INSERT INTO password_resets (token_hash, user_id, created_by, expires_at) VALUES (?, ?, ?, ?)',
+  validResetLink: `SELECT u.id, u.name FROM password_resets r JOIN users u ON u.id = r.user_id
+                    WHERE r.token_hash = ? AND r.used_at IS NULL AND r.expires_at > ?`,
+  // One statement, so a link can only ever be used once, even if opened twice at the same moment.
+  useResetLink: `UPDATE password_resets SET used_at = datetime('now')
+                  WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
+                  RETURNING user_id`,
+  setPassword: 'UPDATE users SET password_hash = ? WHERE id = ?',
 };
 
 /** Thin async wrapper over a D1 binding. */
@@ -168,11 +196,11 @@ export function createApi(d1) {
     return row;
   }
 
-  async function newFamily(name) {
+  async function newFamily(name, organizerId) {
     for (let i = 0; i < 5; i++) {
       const code = makeInviteCode();
       if (!(await db.get(SQL.familyByCode, code))) {
-        return (await db.run(SQL.insertFamily, name, code)).last_row_id;
+        return (await db.run(SQL.insertFamily, name, code, organizerId)).last_row_id;
       }
     }
     fail(500, 'Could not generate an invite code, please try again');
@@ -182,10 +210,8 @@ export function createApi(d1) {
     'POST /api/signup': async (ctx) => {
       const name = text(ctx.body.name, 'Name', { required: true, max: 60 });
       const email = text(ctx.body.email, 'Email', { required: true, max: 200 }).toLowerCase();
-      const password = ctx.body.password;
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail(400, 'Please enter a valid email');
-      if (typeof password !== 'string' || password.length < 8) fail(400, 'Password must be at least 8 characters');
-      if (password.length > 200) fail(400, 'Password is too long');
+      const password = newPassword(ctx.body.password);
       if (await db.get(SQL.userByEmail, email)) fail(409, 'An account with that email already exists');
 
       const code = typeof ctx.body.inviteCode === 'string' ? ctx.body.inviteCode.trim().toUpperCase() : '';
@@ -221,10 +247,20 @@ export function createApi(d1) {
       const user = await requireUser(ctx);
       const family = user.family_id ? await db.get(SQL.familyById, user.family_id) : null;
       const members = family ? await db.all(SQL.members, family.id) : [];
+      const organizer = members.find((m) => m.id === family?.organizer_id);
       return {
         body: {
           user: { id: user.id, name: user.name, email: user.email },
-          family: family ? { id: family.id, name: family.name, inviteCode: family.invite_code } : null,
+          family: family
+            ? {
+                id: family.id,
+                name: family.name,
+                inviteCode: family.invite_code,
+                organizerId: organizer?.id ?? null,
+                organizerName: organizer?.name ?? null,
+                isOrganizer: family.organizer_id === user.id,
+              }
+            : null,
           members: members.map((m) => ({ id: m.id, name: m.name, itemCount: m.item_count })),
         },
       };
@@ -234,7 +270,7 @@ export function createApi(d1) {
       const user = await requireUser(ctx);
       if (user.family_id) fail(409, "You're already in a family");
       const name = text(ctx.body.name, 'Family name', { required: true, max: 80 });
-      const { changes } = await db.run(SQL.setFamily, await newFamily(name), user.id);
+      const { changes } = await db.run(SQL.setFamily, await newFamily(name, user.id), user.id);
       if (!changes) fail(409, "You're already in a family");
       return { status: 201, body: { ok: true } };
     },
@@ -247,6 +283,48 @@ export function createApi(d1) {
       if (!family) fail(404, "That invite code doesn't match any family");
       const { changes } = await db.run(SQL.setFamily, family.id, user.id);
       if (!changes) fail(409, "You're already in a family");
+      return { body: { ok: true } };
+    },
+
+    // ---------- password resets (by the family organizer) ----------
+
+    'POST /api/members/:id/reset-link': async (ctx) => {
+      const user = await requireFamily(ctx);
+      const family = await db.get(SQL.familyById, user.family_id);
+      if (family.organizer_id !== user.id) {
+        const organizer = family.organizer_id ? await db.get(SQL.userById, family.organizer_id) : null;
+        fail(403, `Only ${organizer?.name ?? 'the family organizer'} can reset passwords`);
+      }
+      const member = await db.get(SQL.userById, Number(ctx.params.id) || 0);
+      if (!member || member.family_id !== user.family_id) fail(404, 'Member not found');
+
+      const token = randomToken();
+      const expiresAt = new Date(Date.now() + RESET_LINK_HOURS * 36e5).toISOString();
+      await db.batch([
+        db.stmt(SQL.cancelResetLinks, member.id),
+        db.stmt(SQL.insertResetLink, await sha256Hex(token), member.id, user.id, expiresAt),
+      ]);
+      // The secret goes after "#", which browsers never send to the server, so it can't end up in request logs.
+      return { status: 201, body: { url: `${ctx.origin}/#/reset/${token}`, name: member.name, expiresAt } };
+    },
+
+    'POST /api/password-reset/check': async (ctx) => {
+      const token = String(ctx.body.token || '');
+      const row = token && (await db.get(SQL.validResetLink, await sha256Hex(token), new Date().toISOString()));
+      if (!row) fail(410, 'This reset link has expired or was already used. Ask your family organizer for a new one.');
+      return { body: { name: row.name } };
+    },
+
+    'POST /api/password-reset': async (ctx) => {
+      const token = String(ctx.body.token || '');
+      const password = newPassword(ctx.body.password);
+      const hash = await hashPassword(password);
+      const used = token && (await db.get(SQL.useResetLink, await sha256Hex(token), new Date().toISOString()));
+      if (!used) fail(410, 'This reset link has expired or was already used. Ask your family organizer for a new one.');
+      await db.run(SQL.setPassword, hash, used.user_id);
+      // Sign out everywhere (including whoever might have been using the old password), then sign in here.
+      await destroyAllSessions(db, used.user_id);
+      ctx.setSession(await createSession(db, used.user_id));
       return { body: { ok: true } };
     },
 

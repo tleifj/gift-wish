@@ -51,6 +51,7 @@ export default {
       const ctx = {
         method: request.method,
         path: url.pathname,
+        origin: url.origin,
         token: parseCookies(request.headers.get('cookie'))[COOKIE],
         body: {},
         setSession: ({ token, maxAge }) => {

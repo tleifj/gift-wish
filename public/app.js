@@ -40,10 +40,12 @@ function toast(msg, isError = false) {
  * A styled replacement for window.confirm(). Resolves true only if the person
  * picks the confirm button; Cancel, Esc and clicking outside all resolve false.
  */
-function confirmDialog({ title, message = '', confirmLabel = 'Confirm', icon: iconName = 'trash-2' }) {
+function confirmDialog({ title, message = '', confirmLabel = 'Confirm', icon: iconName = 'trash-2', danger = iconName === 'trash-2' }) {
   const dlg = document.getElementById('confirm');
   if (typeof dlg?.showModal !== 'function') return Promise.resolve(window.confirm(title));
   dlg.querySelector('.confirm-icon').innerHTML = icon(iconName, { size: 22 });
+  dlg.querySelector('.confirm-icon').classList.toggle('ok', !danger);
+  dlg.querySelector('#confirm-ok').className = `btn ${danger ? 'danger' : 'primary'}`;
   dlg.querySelector('#confirm-title').textContent = title;
   dlg.querySelector('#confirm-message').textContent = message;
   dlg.querySelector('#confirm-message').hidden = !message;
@@ -98,6 +100,8 @@ async function render() {
   renderAccount();
   const hash = location.hash.replace(/^#/, '') || '/';
 
+  const reset = hash.match(/^\/reset\/([A-Za-z0-9_-]+)$/);
+  if (reset) return renderPasswordReset(reset[1]);
   if (!me) return renderAuth(hash.startsWith('/signup') ? 'signup' : hash.startsWith('/login') ? 'login' : 'default');
   if (!me.family) return renderOnboarding();
   if (location.search) history.replaceState(null, '', location.pathname + location.hash);
@@ -154,6 +158,15 @@ function renderAuth(mode) {
           <input name="inviteCode" value="${esc(invite)}" autocapitalize="characters" /></label>` : ''}
         <button class="btn primary" type="submit">${isSignup ? 'Sign up' : 'Sign in'}</button>
       </form>
+      ${
+        isSignup
+          ? ''
+          : `<details class="forgot">
+              <summary>Forgot your password?</summary>
+              <p>Ask the person who set up your family on Gift Wish. They can open <b>Family</b>, tap
+                <b>Reset password</b> next to your name, and send you a link to choose a new one.</p>
+            </details>`
+      }
       <p class="switch">${
         isSignup
           ? 'Already have an account? <a href="#/login">Sign in</a>'
@@ -220,19 +233,126 @@ function renderFamily() {
       <ul class="members">
         ${me.members
           .map(
-            (m) => `<li><a href="${m.id === me.user.id ? '#/' : `#/list/${m.id}`}">${esc(m.name)}${
-              m.id === me.user.id ? ' <span class="muted">(you)</span>' : ''
-            }</a><span class="muted">${m.itemCount} item${m.itemCount === 1 ? '' : 's'}</span></li>`
+            (m) => `<li>
+              <div class="member-name">
+                <a href="${m.id === me.user.id ? '#/' : `#/list/${m.id}`}">${esc(m.name)}</a>
+                ${m.id === me.user.id ? '<span class="muted">(you)</span>' : ''}
+                ${m.id === me.family.organizerId ? '<span class="badge organizer">Organizer</span>' : ''}
+              </div>
+              <div class="member-side">
+                <span class="muted">${m.itemCount} item${m.itemCount === 1 ? '' : 's'}</span>
+                ${
+                  me.family.isOrganizer && m.id !== me.user.id
+                    ? `<button class="btn small ghost" data-reset="${m.id}">${icon('key-round', { size: 15 })}Reset password</button>`
+                    : ''
+                }
+              </div>
+            </li>`
           )
           .join('')}
       </ul>
+      <p class="help member-help">${
+        me.family.isOrganizer
+          ? 'As the organizer, you can send anyone who forgets their password a link to choose a new one.'
+          : `Forgot your password? ${esc(me.family.organizerName ?? 'The family organizer')} can send you a link to reset it.`
+      }</p>
     </section>`;
+  app.querySelectorAll('[data-reset]').forEach((btn) => {
+    const member = me.members.find((m) => m.id === Number(btn.dataset.reset));
+    btn.onclick = () => createResetLink(member);
+  });
   document.getElementById('copy').onclick = async () => {
     try {
       await navigator.clipboard.writeText(link);
       toast('Invite link copied!');
     } catch {
       toast('Copy failed — select the link and copy it manually', true);
+    }
+  };
+}
+
+// ---------- password reset ----------
+async function createResetLink(member) {
+  const ok = await confirmDialog({
+    title: `Reset ${member.name}’s password?`,
+    message: `You’ll get a link to send ${member.name}. Their current password keeps working until they use it.`,
+    confirmLabel: 'Create link',
+    icon: 'key-round',
+  });
+  if (!ok) return;
+  let link;
+  try {
+    link = await api('POST', `/api/members/${member.id}/reset-link`);
+  } catch (err) {
+    return toast(err.message, true);
+  }
+
+  const dlg = document.getElementById('reset-link');
+  dlg.querySelector('.confirm-icon').innerHTML = icon('key-round', { size: 22 });
+  dlg.querySelector('#reset-link-title').textContent = `Send this link to ${member.name}`;
+  dlg.querySelector('#reset-link-help').textContent =
+    `Text or message it to them. It works once and expires in 24 hours. When they open it, they’ll choose a new password and be signed out everywhere else.`;
+  const field = dlg.querySelector('#reset-link-url');
+  field.value = link.url;
+
+  const copyBtn = dlg.querySelector('#reset-link-copy');
+  copyBtn.innerHTML = `${icon('copy', { size: 16 })}Copy link`;
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(link.url);
+      copyBtn.innerHTML = `${icon('check', { size: 16 })}Copied`;
+    } catch {
+      field.focus();
+      field.select();
+      toast('Copy didn’t work. The link is selected, so copy it from there.', true);
+    }
+  };
+
+  const shareBtn = dlg.querySelector('#reset-link-share');
+  const shareData = { title: 'Reset your Gift Wish password', text: `Here’s a link to reset your Gift Wish password:`, url: link.url };
+  shareBtn.hidden = !(navigator.share && navigator.canShare?.(shareData));
+  shareBtn.innerHTML = `${icon('share-2', { size: 16 })}Share`;
+  shareBtn.onclick = () => navigator.share(shareData).catch(() => {});
+
+  dlg.showModal();
+}
+
+async function renderPasswordReset(token) {
+  let who;
+  try {
+    who = await api('POST', '/api/password-reset/check', { token });
+  } catch (err) {
+    app.innerHTML = `
+      <section class="card narrow">
+        <div class="confirm-icon">${icon('triangle-alert', { size: 22 })}</div>
+        <h1>This link doesn’t work anymore</h1>
+        <p class="muted">${esc(err.message)}</p>
+        <a class="btn" href="#/login">Go to sign in</a>
+      </section>`;
+    return;
+  }
+  app.innerHTML = `
+    <section class="card narrow">
+      <div class="confirm-icon ok">${icon('key-round', { size: 22 })}</div>
+      <h1>Choose a new password</h1>
+      <p class="muted">For ${esc(who.name)}’s Gift Wish account. You’ll be signed in when you’re done.</p>
+      <form id="reset-form">
+        <label>New password<input name="password" type="password" required minlength="8" autocomplete="new-password" /></label>
+        <label>Type it again<input name="again" type="password" required minlength="8" autocomplete="new-password" /></label>
+        <button class="btn primary" type="submit">${icon('shield-check', { size: 16 })}Save password</button>
+      </form>
+    </section>`;
+  app.querySelector('[name=password]').focus();
+  document.getElementById('reset-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const { password, again } = formData(e.target);
+    if (password !== again) return toast('The two passwords don’t match', true);
+    try {
+      await api('POST', '/api/password-reset', { token, password });
+      toast('Password saved. You’re signed in.');
+      location.hash = '#/';
+    } catch (err) {
+      toast(err.message, true);
     }
   };
 }
