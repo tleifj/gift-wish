@@ -212,6 +212,13 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .item.taken, .item.bought { opacity: 0.85; }
 .item.mine { border-color: var(--mine); }
 .item.removed { border-style: dashed; }
+.item.changed { border-color: var(--warn); opacity: 1; }
+.item.changed .title { text-decoration: none; color: var(--text); }
+.change-notice { display: grid; gap: 6px; justify-items: start; margin-top: 4px; }
+.change-notice ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; font-size: 0.9rem; }
+.change-notice li { overflow-wrap: anywhere; }
+.change-notice s { color: var(--muted); }
+.change-notice .icon { vertical-align: -2px; color: var(--muted); }
 .item.removed .title { text-decoration: line-through; }
 .empty { color: var(--muted); padding: 28px 24px; text-align: center; border: 1px dashed var(--border); border-radius: var(--radius); display: grid; justify-items: center; gap: 8px; }
 

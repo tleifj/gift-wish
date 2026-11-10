@@ -120,6 +120,7 @@ function present(row, viewer) {
   if (row.owner_id === viewer.id) return item;
 
   item.removed = Boolean(row.deleted_at);
+  if (row.claim_user_id === viewer.id && !row.deleted_at) item.changes = changesSinceClaim(row);
   item.claim = row.claim_status
     ? {
         status: row.claim_status,
@@ -131,8 +132,25 @@ function present(row, viewer) {
   return item;
 }
 
+// What the owner changed after this person claimed the item (or last said "Got it").
+const WATCHED_FIELDS = [
+  ['title', 'Name'],
+  ['price', 'Price'],
+  ['notes', 'Notes'],
+  ['url', 'Link'],
+];
+function changesSinceClaim(row) {
+  return WATCHED_FIELDS.filter(([key]) => (row[`seen_${key}`] ?? null) !== (row[key] ?? null)).map(([key, label]) => ({
+    field: key,
+    label,
+    from: row[`seen_${key}`] ?? null,
+    to: row[key] ?? null,
+  }));
+}
+
 const ITEM_SELECT = `
-  SELECT i.*, c.status AS claim_status, c.user_id AS claim_user_id, cu.name AS claim_user_name
+  SELECT i.*, c.status AS claim_status, c.user_id AS claim_user_id, cu.name AS claim_user_name,
+         c.seen_title, c.seen_url, c.seen_price, c.seen_notes
     FROM items i
     LEFT JOIN claims c ON c.item_id = i.id
     LEFT JOIN users cu ON cu.id = c.user_id
@@ -173,9 +191,17 @@ const SQL = {
   hardDeleteIfUnclaimed: 'DELETE FROM items WHERE id = ? AND NOT EXISTS (SELECT 1 FROM claims WHERE item_id = items.id)',
   // A single statement, so two people tapping at the same moment can't both get the item:
   // it inserts a new claim, or updates one that already belongs to this person, or does nothing.
-  claim: `INSERT INTO claims (item_id, user_id, status) VALUES (?, ?, ?)
+  claim: `INSERT INTO claims (item_id, user_id, status, seen_title, seen_url, seen_price, seen_notes)
+          SELECT id, ?, ?, title, url, price, notes FROM items WHERE id = ?
           ON CONFLICT(item_id) DO UPDATE SET status = excluded.status, updated_at = datetime('now')
           WHERE claims.user_id = excluded.user_id`,
+  // "Got it": the claimer has seen the current version.
+  acknowledgeChanges: `UPDATE claims SET
+            seen_title = (SELECT title FROM items WHERE id = claims.item_id),
+            seen_url   = (SELECT url   FROM items WHERE id = claims.item_id),
+            seen_price = (SELECT price FROM items WHERE id = claims.item_id),
+            seen_notes = (SELECT notes FROM items WHERE id = claims.item_id)
+          WHERE item_id = ? AND user_id = ?`,
   releaseClaim: 'DELETE FROM claims WHERE item_id = ? AND user_id = ?',
   deleteIfRemoved: 'DELETE FROM items WHERE id = ? AND deleted_at IS NOT NULL',
   ownerNames: 'SELECT id, name FROM users WHERE family_id = ?',
@@ -490,10 +516,19 @@ export function createApi(d1) {
       requireOpenYear(row.year);
       const status = ctx.body.status ?? 'claimed';
       if (status !== 'claimed' && status !== 'purchased') fail(400, 'Status must be "claimed" or "purchased"');
-      const { changes } = await db.run(SQL.claim, row.id, user.id, status);
+      const { changes } = await db.run(SQL.claim, user.id, status, row.id);
       const now = await db.get(SQL.itemRow, row.id);
       if (!changes) fail(409, `${now?.claim_user_name ?? 'Someone'} is already getting this`);
       return { body: { item: present(now, user) } };
+    },
+
+    // "Got it" on a "Changed since you bought this" notice.
+    'POST /api/items/:id/claim/seen': async (ctx) => {
+      const user = await requireFamily(ctx);
+      const row = await loadItem(user, ctx.params.id);
+      const { changes } = await db.run(SQL.acknowledgeChanges, row.id, user.id);
+      if (!changes) fail(404, 'You haven’t claimed this item');
+      return { body: { item: present(await db.get(SQL.itemRow, row.id), user) } };
     },
 
     'DELETE /api/items/:id/claim': async (ctx) => {

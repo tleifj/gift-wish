@@ -18,6 +18,9 @@ Details:
   items, so it can't be found in browser dev tools either. Owners also can't claim or unclaim their own items.
 - **No double-buying.** Each item can be claimed by one person. Others see who has it, and only that
   person can release it.
+- **Changed items.** If the owner edits an item after someone claimed or bought it, that person sees
+  "Changed since you bought this" on the item, with each change shown (for example `Notes: Size 10 → Size 12`),
+  until they tap *Got it*. Name, price, notes and link are watched. The owner gets no sign of it.
 - **Removed items.** If the owner removes an item someone already claimed or bought, that person sees
   "Removed from the list" (so they know to return it or pick something else). The owner gets the same
   response either way, so removing something doesn't tell them whether it was claimed.

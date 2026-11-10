@@ -486,7 +486,14 @@ function itemHtml(item, isMine, isOpen = true) {
       c.status === 'purchased'
         ? `<span class="badge done">${icon('circle-check', { size: 14 })}You bought this</span>`
         : `<span class="badge mine">${icon('bookmark-plus', { size: 14 })}You’re getting this</span>`;
-    if (isOpen) actions =
+    if (item.changes?.length) {
+      cls += ' changed';
+      status += changesHtml(item, c.status);
+    }
+    if (item.changes?.length) {
+      actions += `<button class="btn small primary" data-action="seen" data-id="${item.id}">${icon('check', { size: 15 })}Got it</button>`;
+    }
+    if (isOpen) actions +=
       (c.status === 'claimed' ? `<button class="btn small primary" data-action="purchase" data-id="${item.id}">${icon('check', { size: 15 })}Mark bought</button>` : '') +
       `<button class="btn small ghost" data-action="release" data-id="${item.id}">${icon('undo-2', { size: 15 })}${c.status === 'purchased' ? 'Undo' : 'Release'}</button>`;
   } else {
@@ -512,6 +519,27 @@ function itemHtml(item, isMine, isOpen = true) {
     </div>
     <div class="actions">${actions}</div>
   </li>`;
+}
+
+/** "Changed since you bought this" notice: each changed field, old value struck through, new value after. */
+function changesHtml(item, claimStatus) {
+  const show = (field, value) => {
+    if (value === null || value === '') return '<i>empty</i>';
+    if (field === 'price') return esc(formatPrice(value));
+    if (field === 'url') return esc(hostOf(value));
+    return esc(value);
+  };
+  return `<div class="change-notice" role="note">
+    <span class="badge warn">${icon('triangle-alert', { size: 14 })}Changed since you ${claimStatus === 'purchased' ? 'bought' : 'claimed'} this</span>
+    <ul>
+      ${item.changes
+        .map(
+          (ch) => `<li><b>${esc(ch.label)}:</b> <s>${show(ch.field, ch.from)}</s> ${icon('arrow-right', { size: 13 })}
+            ${ch.field === 'url' && ch.to ? `<a href="${esc(ch.to)}" target="_blank" rel="noopener noreferrer">${show(ch.field, ch.to)}</a>` : show(ch.field, ch.to)}</li>`
+        )
+        .join('')}
+    </ul>
+  </div>`;
 }
 
 // ---------- import ----------
@@ -723,6 +751,10 @@ async function onItemAction(action, id, items, owner) {
         break;
       case 'release':
         await api('DELETE', `/api/items/${id}/claim`);
+        break;
+      case 'seen':
+        await api('POST', `/api/items/${id}/claim/seen`);
+        toast('Got it');
         break;
       case 'copy':
         await api('POST', `/api/items/${id}/copy`, { year: THIS_YEAR });
