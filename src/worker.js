@@ -52,6 +52,7 @@ export default {
         method: request.method,
         path: url.pathname,
         origin: url.origin,
+        query: url.searchParams,
         token: parseCookies(request.headers.get('cookie'))[COOKIE],
         body: {},
         setSession: ({ token, maxAge }) => {

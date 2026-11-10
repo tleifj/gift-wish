@@ -4,7 +4,20 @@ const app = document.getElementById('app');
 const account = document.getElementById('account');
 const toastEl = document.getElementById('toast');
 
-let me = null; // { user, family, members }
+let me = null; // { user, family, members, years }
+
+// Which year's lists are showing. Each year starts fresh; past years are read-only.
+const THIS_YEAR = new Date().getFullYear();
+let year = THIS_YEAR;
+try {
+  year = Number(sessionStorage.getItem('gw-year')) || THIS_YEAR;
+} catch {}
+function setYear(y) {
+  year = y;
+  try {
+    sessionStorage.setItem('gw-year', String(y));
+  } catch {}
+}
 
 // ---------- helpers ----------
 const esc = (s) =>
@@ -97,7 +110,7 @@ window.addEventListener('hashchange', render);
 
 async function loadMe() {
   try {
-    me = await api('GET', '/api/me');
+    me = await api('GET', `/api/me?year=${year}`);
   } catch (e) {
     if (e.status !== 401) throw e;
     me = null;
@@ -148,6 +161,24 @@ function nav(active) {
       .join('')}
     ${tab('#/family', 'Family', 'family', '', 'users')}
   </nav>`;
+}
+
+/** Year picker: this year plus every year the family has lists for. */
+function yearPicker() {
+  const years = [...new Set([THIS_YEAR, year, ...(me.years || [])])].sort((a, b) => b - a);
+  return `<label class="year-picker">${icon('calendar', { size: 16 })}<span class="sr-only">Year</span>
+    <select id="year-select" aria-label="Show lists for year">
+      ${years.map((y) => `<option value="${y}" ${y === year ? 'selected' : ''}>${y}</option>`).join('')}
+    </select>
+  </label>`;
+}
+
+function wireYearPicker() {
+  const sel = document.getElementById('year-select');
+  if (sel) sel.onchange = () => {
+    setYear(Number(sel.value));
+    render();
+  };
 }
 
 // ---------- auth ----------
@@ -370,19 +401,22 @@ async function renderPasswordReset(token) {
 async function renderList(userId) {
   let data;
   try {
-    data = await api('GET', `/api/lists/${userId}`);
+    data = await api('GET', `/api/lists/${userId}?year=${year}`);
   } catch (err) {
     app.innerHTML = `${nav('')}<section class="card"><p>${esc(err.message)}</p></section>`;
     return;
   }
-  const { owner, isMine, items } = data;
+  const { owner, isMine, items, isOpen } = data;
   app.innerHTML = `
     ${nav(`list-${owner.id}`)}
     <section>
       <div class="list-head">
-        <h1>${isMine ? 'My wish list' : `${esc(owner.name)}’s wish list`}</h1>
+        <div class="title-row">
+          <h1>${isMine ? 'My wish list' : `${esc(owner.name)}’s wish list`}</h1>
+          ${yearPicker()}
+        </div>
         ${
-          isMine
+          isMine && isOpen
             ? `<div class="head-actions">
                 <button class="btn" id="import">${icon('import')}Import from Amazon</button>
                 <button class="btn primary" id="add">${icon('plus')}Add a wish</button>
@@ -391,17 +425,27 @@ async function renderList(userId) {
         }
       </div>
       ${
-        isMine
+        !isOpen
+          ? `<p class="hint past">${icon('lock')}<span>This is ${year}’s list. Past years are kept so you can look back, but they can’t be changed.
+              ${isMine ? `Tap <b>Add to ${THIS_YEAR}</b> to bring a wish over to this year.` : ''}
+              <button type="button" class="link-btn" id="to-this-year">Go to ${THIS_YEAR}</button></span></p>`
+          : isMine
           ? `<p class="hint">${icon('eye-off')}<span>No peeking: you won’t see who is buying what from your list. Everyone else will, so nobody doubles up.</span></p>`
           : `<p class="hint">${icon('gift')}<span>Tap <b>I’ll get this</b> so others know, then <b>Mark bought</b> once you have it. ${esc(owner.name)} can’t see any of this.</span></p>`
       }
       <div id="editor"></div>
       <ul class="items">
-        ${items.length ? items.map((i) => itemHtml(i, isMine)).join('') : emptyHtml(isMine, owner)}
+        ${items.length ? items.map((i) => itemHtml(i, isMine, isOpen)).join('') : emptyHtml(isMine, owner, isOpen)}
       </ul>
     </section>`;
 
-  if (isMine) {
+  wireYearPicker();
+  const back = document.getElementById('to-this-year');
+  if (back) back.onclick = () => {
+    setYear(THIS_YEAR);
+    render();
+  };
+  if (isMine && isOpen) {
     document.getElementById('add').onclick = () => openEditor(null);
     document.getElementById('import').onclick = () => openImporter();
   }
@@ -410,19 +454,23 @@ async function renderList(userId) {
   });
 }
 
-function emptyHtml(isMine, owner) {
-  return `<li class="empty">${icon('package-open', { size: 28 })}<span>${
-    isMine ? 'Your list is empty. Add the first thing you’d love to get, or import your Amazon wish list.' : `${esc(owner.name)} hasn’t added anything yet.`
-  }</span></li>`;
+function emptyHtml(isMine, owner, isOpen = true) {
+  let text;
+  if (!isOpen) text = isMine ? `You didn’t have a list in ${year}.` : `${esc(owner.name)} didn’t have a list in ${year}.`;
+  else if (isMine) text = `Your ${year} list is empty. Add the first thing you’d love to get, or import your Amazon wish list.`;
+  else text = `${esc(owner.name)} hasn’t added anything for ${year} yet.`;
+  return `<li class="empty">${icon('package-open', { size: 28 })}<span>${text}</span></li>`;
 }
 
-function itemHtml(item, isMine) {
+function itemHtml(item, isMine, isOpen = true) {
   const c = item.claim;
   let status = '';
   let actions = '';
   let cls = '';
 
-  if (isMine) {
+  if (isMine && !isOpen) {
+    actions = `<button class="btn small" data-action="copy" data-id="${item.id}">${icon('copy-plus', { size: 15 })}Add to ${THIS_YEAR}</button>`;
+  } else if (isMine) {
     actions = `<button class="btn small" data-action="edit" data-id="${item.id}">${icon('pencil', { size: 15 })}Edit</button>
                <button class="btn small ghost" data-action="delete" data-id="${item.id}">${icon('trash-2', { size: 15 })}Remove</button>`;
   } else if (item.removed) {
@@ -430,7 +478,7 @@ function itemHtml(item, isMine) {
     status = `<span class="badge warn">${icon('triangle-alert', { size: 14 })}Removed from the list</span>`;
     actions = `<button class="btn small" data-action="release" data-id="${item.id}">${icon('x', { size: 15 })}Got it, dismiss</button>`;
   } else if (!c) {
-    actions = `<button class="btn small primary" data-action="claim" data-id="${item.id}">${icon('bookmark-plus', { size: 15 })}I’ll get this</button>
+    if (isOpen) actions = `<button class="btn small primary" data-action="claim" data-id="${item.id}">${icon('bookmark-plus', { size: 15 })}I’ll get this</button>
                <button class="btn small" data-action="purchase" data-id="${item.id}">${icon('check', { size: 15 })}I already bought it</button>`;
   } else if (c.byMe) {
     cls = c.status === 'purchased' ? 'bought' : 'mine';
@@ -438,7 +486,7 @@ function itemHtml(item, isMine) {
       c.status === 'purchased'
         ? `<span class="badge done">${icon('circle-check', { size: 14 })}You bought this</span>`
         : `<span class="badge mine">${icon('bookmark-plus', { size: 14 })}You’re getting this</span>`;
-    actions =
+    if (isOpen) actions =
       (c.status === 'claimed' ? `<button class="btn small primary" data-action="purchase" data-id="${item.id}">${icon('check', { size: 15 })}Mark bought</button>` : '') +
       `<button class="btn small ghost" data-action="release" data-id="${item.id}">${icon('undo-2', { size: 15 })}${c.status === 'purchased' ? 'Undo' : 'Release'}</button>`;
   } else {
@@ -516,7 +564,7 @@ function openImporter(source = 'wishlist') {
     btn.classList.add('busy');
     try {
       const f = e.target;
-      const body = { source };
+      const body = { source, year };
       if (source === 'wishlist') body.url = f.url.value;
       if (source === 'links') body.text = f.text.value;
       if (source === 'file') {
@@ -598,7 +646,7 @@ function renderImportPreview({ listName, items }) {
       });
     addBtn.disabled = true;
     try {
-      const { added } = await api('POST', '/api/items/import', { items: chosen });
+      const { added } = await api('POST', '/api/items/import', { items: chosen, year });
       toast(`Added ${added} item${added === 1 ? '' : 's'} to your list`);
       render();
     } catch (err) {
@@ -637,7 +685,7 @@ function openEditor(item) {
   document.getElementById('item-form').onsubmit = async (e) => {
     e.preventDefault();
     try {
-      await api(item ? 'PUT' : 'POST', item ? `/api/items/${item.id}` : '/api/items', formData(e.target));
+      await api(item ? 'PUT' : 'POST', item ? `/api/items/${item.id}` : '/api/items', { ...formData(e.target), year });
       toast(item ? 'Saved' : 'Added to your list');
       render();
     } catch (err) {
@@ -676,6 +724,10 @@ async function onItemAction(action, id, items, owner) {
       case 'release':
         await api('DELETE', `/api/items/${id}/claim`);
         break;
+      case 'copy':
+        await api('POST', `/api/items/${id}/copy`, { year: THIS_YEAR });
+        toast(`Added “${item.title}” to your ${THIS_YEAR} list`);
+        break;
     }
   } catch (err) {
     toast(err.message, true);
@@ -685,7 +737,7 @@ async function onItemAction(action, id, items, owner) {
 
 // ---------- shopping ----------
 async function renderShopping() {
-  const { items } = await api('GET', '/api/claims');
+  const { items } = await api('GET', `/api/claims?year=${year}`);
   const groups = new Map();
   for (const i of items) {
     if (!groups.has(i.ownerId)) groups.set(i.ownerId, { name: i.ownerName, items: [] });
@@ -695,19 +747,22 @@ async function renderShopping() {
   app.innerHTML = `
     ${nav('shopping')}
     <section>
-      <div class="list-head"><h1>My shopping</h1></div>
+      <div class="list-head"><div class="title-row"><h1>My shopping</h1>${yearPicker()}</div></div>
       <p class="hint">${
         items.length
-          ? `${todo} still to buy, ${items.length - todo} done.`
+          ? `${year}: ${todo} still to buy, ${items.length - todo} done.`
+          : year < THIS_YEAR
+          ? `You didn’t claim anything in ${year}.`
           : 'Nothing yet. Open someone’s list and tap <b>I’ll get this</b>.'
       }</p>
       ${[...groups.values()]
         .map(
           (g) => `<h2 class="group">For ${esc(g.name)}</h2>
-          <ul class="items">${g.items.map((i) => itemHtml(i, false)).join('')}</ul>`
+          <ul class="items">${g.items.map((i) => itemHtml(i, false, year >= THIS_YEAR)).join('')}</ul>`
         )
         .join('')}
     </section>`;
+  wireYearPicker();
   app.querySelectorAll('[data-action]').forEach((btn) => {
     const item = items.find((i) => i.id === Number(btn.dataset.id));
     btn.onclick = () => onItemAction(btn.dataset.action, item.id, items, { name: item.ownerName });

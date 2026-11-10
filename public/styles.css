@@ -269,6 +269,27 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .pick .badge { margin-top: 0; }
 input[type=file] { padding: 8px; }
 
+/* ---------- years ---------- */
+.title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.year-picker {
+  position: relative; display: inline-flex; align-items: center; gap: 0;
+  font-weight: 600; color: var(--accent);
+}
+.year-picker .icon { position: absolute; left: 12px; pointer-events: none; }
+.year-picker select {
+  appearance: none; -webkit-appearance: none; width: auto; cursor: pointer;
+  padding: 6px 30px 6px 36px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--accent);
+  font-weight: 700; font-variant-numeric: tabular-nums;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 15px center, right 10px center; background-size: 5px 5px; background-repeat: no-repeat;
+}
+.year-picker select:hover { border-color: var(--accent); }
+.hint.past { background: var(--taken-soft); }
+.hint.past .icon { color: var(--taken); }
+.hint .link-btn { font-weight: 600; text-decoration: underline; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
 /* ---------- prices ---------- */
 .price { font-variant-numeric: tabular-nums; }
 .money { position: relative; display: block; }

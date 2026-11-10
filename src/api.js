@@ -11,6 +11,33 @@ import {
 } from './auth.js';
 
 const RESET_LINK_HOURS = 24;
+
+// ---------- years ----------
+// Every item belongs to a year, and the app shows one year at a time.
+// A year is "open" (items can be added, edited and claimed) from the moment it has
+// started anywhere on Earth until it has ended everywhere: UTC+14 reaches a new year
+// 14 hours before UTC, and UTC-12 leaves the old one 12 hours after. So whatever
+// year someone's own clock shows is always open.
+const HOUR = 36e5;
+export function openYears(now = Date.now()) {
+  return {
+    first: new Date(now - 12 * HOUR).getUTCFullYear(),
+    last: new Date(now + 14 * HOUR).getUTCFullYear(),
+  };
+}
+
+function parseYear(value) {
+  if (value === undefined || value === null || value === '') return new Date().getUTCFullYear();
+  const y = Number(value);
+  if (!Number.isInteger(y) || y < 2000 || y > 2100) fail(400, 'Year must be between 2000 and 2100');
+  return y;
+}
+
+function requireOpenYear(year) {
+  const { first, last } = openYears();
+  if (year < first) fail(409, `${year} is over, so its lists can't be changed anymore`);
+  if (year > last) fail(400, `${year} hasn't started yet`);
+}
 import { ImportError, importFromLinks, importFromSavedPage, importFromWishlistUrl } from './amazon.js';
 
 export class HttpError extends Error {
@@ -88,6 +115,7 @@ function present(row, viewer) {
     notes: row.notes,
     priority: row.priority,
     createdAt: row.created_at,
+    year: row.year,
   };
   if (row.owner_id === viewer.id) return item;
 
@@ -120,20 +148,24 @@ const SQL = {
   // Only joins if the person isn't in a family yet, so two quick requests can't both win.
   setFamily: 'UPDATE users SET family_id = ? WHERE id = ? AND family_id IS NULL',
   members: `SELECT u.id, u.name,
-                   (SELECT COUNT(*) FROM items i WHERE i.owner_id = u.id AND i.deleted_at IS NULL) AS item_count
+                   (SELECT COUNT(*) FROM items i
+                     WHERE i.owner_id = u.id AND i.deleted_at IS NULL AND i.year = ?) AS item_count
               FROM users u WHERE u.family_id = ? ORDER BY u.name COLLATE NOCASE`,
+  // Years that have any items in this family, for the year picker.
+  familyYears: `SELECT DISTINCT i.year FROM items i JOIN users u ON u.id = i.owner_id
+                 WHERE u.family_id = ? AND i.deleted_at IS NULL ORDER BY i.year DESC`,
   itemRow: `${ITEM_SELECT} WHERE i.id = ?`,
   // Owner sees only live items. Others also see removed items they had claimed,
   // so they know not to buy it (or that they may want to return it).
   listItems: `${ITEM_SELECT}
-               WHERE i.owner_id = ?
+               WHERE i.owner_id = ? AND i.year = ?
                  AND (i.deleted_at IS NULL OR (c.user_id = ? AND i.owner_id <> ?))
                ORDER BY i.deleted_at IS NOT NULL, i.priority, i.created_at, i.id`,
   myClaims: `${ITEM_SELECT}
                JOIN users o ON o.id = i.owner_id
-              WHERE c.user_id = ? AND o.family_id = ?
+              WHERE c.user_id = ? AND o.family_id = ? AND i.year = ?
               ORDER BY o.name COLLATE NOCASE, c.status DESC, i.title COLLATE NOCASE`,
-  insertItem: 'INSERT INTO items (owner_id, title, url, price, notes, priority) VALUES (?, ?, ?, ?, ?, ?)',
+  insertItem: 'INSERT INTO items (owner_id, year, title, url, price, notes, priority) VALUES (?, ?, ?, ?, ?, ?, ?)',
   updateItem: 'UPDATE items SET title = ?, url = ?, price = ?, notes = ?, priority = ? WHERE id = ?',
   // Run together in one batch: keep a tombstone only if someone has claimed it.
   softDeleteIfClaimed:
@@ -147,7 +179,7 @@ const SQL = {
   releaseClaim: 'DELETE FROM claims WHERE item_id = ? AND user_id = ?',
   deleteIfRemoved: 'DELETE FROM items WHERE id = ? AND deleted_at IS NOT NULL',
   ownerNames: 'SELECT id, name FROM users WHERE family_id = ?',
-  myLiveItems: 'SELECT title, url FROM items WHERE owner_id = ? AND deleted_at IS NULL',
+  myLiveItems: 'SELECT title, url FROM items WHERE owner_id = ? AND year = ? AND deleted_at IS NULL',
   // Creating a new reset link cancels any earlier unused one for that person.
   cancelResetLinks: 'DELETE FROM password_resets WHERE user_id = ? AND used_at IS NULL',
   insertResetLink: 'INSERT INTO password_resets (token_hash, user_id, created_by, expires_at) VALUES (?, ?, ?, ?)',
@@ -246,7 +278,9 @@ export function createApi(d1) {
     'GET /api/me': async (ctx) => {
       const user = await requireUser(ctx);
       const family = user.family_id ? await db.get(SQL.familyById, user.family_id) : null;
-      const members = family ? await db.all(SQL.members, family.id) : [];
+      const year = parseYear(ctx.query.get('year'));
+      const members = family ? await db.all(SQL.members, year, family.id) : [];
+      const years = family ? (await db.all(SQL.familyYears, family.id)).map((r) => r.year) : [];
       const organizer = members.find((m) => m.id === family?.organizer_id);
       return {
         body: {
@@ -262,6 +296,8 @@ export function createApi(d1) {
               }
             : null,
           members: members.map((m) => ({ id: m.id, name: m.name, itemCount: m.item_count })),
+          years,
+          openYears: openYears(),
         },
       };
     },
@@ -332,10 +368,13 @@ export function createApi(d1) {
       const viewer = await requireFamily(ctx);
       const owner = await db.get(SQL.userById, Number(ctx.params.userId) || 0);
       if (!owner || owner.family_id !== viewer.family_id) fail(404, 'List not found');
-      const rows = await db.all(SQL.listItems, owner.id, viewer.id, viewer.id);
+      const year = parseYear(ctx.query.get('year'));
+      const rows = await db.all(SQL.listItems, owner.id, year, viewer.id, viewer.id);
       return {
         body: {
           owner: { id: owner.id, name: owner.name },
+          year,
+          isOpen: year >= openYears().first,
           isMine: owner.id === viewer.id,
           items: rows.map((r) => present(r, viewer)),
         },
@@ -345,13 +384,16 @@ export function createApi(d1) {
     'GET /api/claims': async (ctx) => {
       const viewer = await requireFamily(ctx);
       const names = new Map((await db.all(SQL.ownerNames, viewer.family_id)).map((u) => [u.id, u.name]));
-      const rows = await db.all(SQL.myClaims, viewer.id, viewer.family_id);
-      return { body: { items: rows.map((r) => ({ ...present(r, viewer), ownerName: names.get(r.owner_id) })) } };
+      const year = parseYear(ctx.query.get('year'));
+      const rows = await db.all(SQL.myClaims, viewer.id, viewer.family_id, year);
+      return { body: { year, items: rows.map((r) => ({ ...present(r, viewer), ownerName: names.get(r.owner_id) })) } };
     },
 
     'POST /api/items': async (ctx) => {
       const user = await requireFamily(ctx);
-      const { last_row_id } = await db.run(SQL.insertItem, user.id, ...itemFields(ctx.body));
+      const year = parseYear(ctx.body.year);
+      requireOpenYear(year);
+      const { last_row_id } = await db.run(SQL.insertItem, user.id, year, ...itemFields(ctx.body));
       return { status: 201, body: { item: present(await db.get(SQL.itemRow, last_row_id), user) } };
     },
 
@@ -359,6 +401,7 @@ export function createApi(d1) {
       const user = await requireFamily(ctx);
       const row = await loadItem(user, ctx.params.id);
       if (row.owner_id !== user.id || row.deleted_at) fail(404, 'Item not found');
+      requireOpenYear(row.year);
       await db.run(SQL.updateItem, ...itemFields(ctx.body), row.id);
       return { body: { item: present(await db.get(SQL.itemRow, row.id), user) } };
     },
@@ -367,6 +410,7 @@ export function createApi(d1) {
       const user = await requireFamily(ctx);
       const row = await loadItem(user, ctx.params.id);
       if (row.owner_id !== user.id || row.deleted_at) fail(404, 'Item not found');
+      requireOpenYear(row.year);
       // If someone already claimed it, keep a tombstone so they get told it was removed.
       // The response is identical either way, so the owner learns nothing.
       await db.batch([db.stmt(SQL.softDeleteIfClaimed, row.id), db.stmt(SQL.hardDeleteIfUnclaimed, row.id)]);
@@ -388,7 +432,7 @@ export function createApi(d1) {
         if (err instanceof ImportError) fail(err.status, err.message);
         throw err;
       }
-      const existing = await db.all(SQL.myLiveItems, user.id);
+      const existing = await db.all(SQL.myLiveItems, user.id, parseYear(ctx.body.year));
       const urls = new Set(existing.map((i) => i.url).filter(Boolean));
       const titles = new Set(existing.map((i) => i.title.toLowerCase()));
       return {
@@ -404,6 +448,8 @@ export function createApi(d1) {
 
     'POST /api/items/import': async (ctx) => {
       const user = await requireFamily(ctx);
+      const year = parseYear(ctx.body.year);
+      requireOpenYear(year);
       const list = ctx.body.items;
       if (!Array.isArray(list) || !list.length) fail(400, 'Choose at least one item to add');
       if (list.length > 300) fail(400, 'You can add up to 300 items at a time');
@@ -416,8 +462,23 @@ export function createApi(d1) {
         }
       });
       // A D1 batch runs as one transaction: all rows are added, or none.
-      await db.batch(rows.map((r) => db.stmt(SQL.insertItem, user.id, ...r)));
+      await db.batch(rows.map((r) => db.stmt(SQL.insertItem, user.id, year, ...r)));
       return { status: 201, body: { added: rows.length } };
+    },
+
+    // Copies one of your own items onto another (open) year's list, e.g. a wish that rolls over.
+    // Only the item itself is copied, never who bought it.
+    'POST /api/items/:id/copy': async (ctx) => {
+      const user = await requireFamily(ctx);
+      const row = await loadItem(user, ctx.params.id);
+      if (row.owner_id !== user.id || row.deleted_at) fail(404, 'Item not found');
+      const year = parseYear(ctx.body.year);
+      requireOpenYear(year);
+      if (year === row.year) fail(400, `This is already on your ${year} list`);
+      const { last_row_id } = await db.run(
+        SQL.insertItem, user.id, year, row.title, row.url, row.price, row.notes, row.priority
+      );
+      return { status: 201, body: { item: present(await db.get(SQL.itemRow, last_row_id), user) } };
     },
 
     // Mark "I'm getting this" (status = claimed) or "I bought it" (status = purchased).
@@ -426,6 +487,7 @@ export function createApi(d1) {
       const row = await loadItem(user, ctx.params.id);
       if (row.owner_id === user.id) fail(403, "No peeking! You can't claim items on your own list.");
       if (row.deleted_at) fail(410, 'This item was removed from the list');
+      requireOpenYear(row.year);
       const status = ctx.body.status ?? 'claimed';
       if (status !== 'claimed' && status !== 'purchased') fail(400, 'Status must be "claimed" or "purchased"');
       const { changes } = await db.run(SQL.claim, row.id, user.id, status);

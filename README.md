@@ -26,6 +26,12 @@ Details:
   anything, and only then are they added. Items already on your list are unchecked. If Amazon blocks the
   request (it sometimes shows a robot check to servers), paste product links instead, or save the wish list
   page from your browser and upload it.
+- **A fresh start every year.** Lists belong to a year, and the app opens on the current one, so on
+  January 1 everyone starts with an empty list in the same family. A year picker next to each list title
+  shows earlier years, which are read-only: you can look back at who wanted and bought what, but not change
+  it (the owner still never sees who bought their gifts). On your own past lists, *Add to <this year>*
+  copies a wish forward. A year stays open until it has ended in every time zone, so nobody is cut off
+  early on New Year's Eve.
 - **Forgotten passwords.** Whoever creates a family is its **organizer**. On the Family page they get a
   *Reset password* button next to each member, which makes a one-time link (valid 24 hours) to send by text
   or chat. Opening it lets that person choose a new password and signs them out everywhere else. Only a hash
