@@ -29,6 +29,10 @@ Details:
   anything, and only then are they added. Items already on your list are unchecked. If Amazon blocks the
   request (it sometimes shows a robot check to servers), paste product links instead, or save the wish list
   page from your browser and upload it.
+- **Kids without accounts.** On the Family page, anyone can add a child by name. A child gets a tab and
+  wish lists like everyone else but no login. There's no "no peeking" on a child's list: any adult in the family
+  can add, edit or remove its items (including Amazon import), and everyone, the parents included, sees who's
+  getting what. Kids can be renamed or removed (which deletes their lists).
 - **A fresh start every year.** Lists belong to a year, and the app opens on the current one, so on
   January 1 everyone starts with an empty list in the same family. A year picker next to each list title
   shows earlier years, which are read-only: you can look back at who wanted and bought what, but not change

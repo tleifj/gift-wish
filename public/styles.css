@@ -320,6 +320,13 @@ input[type=file] { padding: 8px; }
 .card.narrow > .confirm-icon { margin-bottom: 4px; }
 .card.narrow > .btn { margin-top: 8px; text-decoration: none; }
 
+/* ---------- kids ---------- */
+.kids .member-name .icon { color: var(--muted); }
+.kids:empty { display: none; }
+.add-child { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.add-child input { flex: 1 1 200px; width: auto; }
+.add-child.rename { margin: 0; width: 100%; }
+
 /* ---------- confirm dialog ---------- */
 .confirm {
   width: min(400px, calc(100% - 32px));

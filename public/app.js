@@ -5,6 +5,7 @@ const account = document.getElementById('account');
 const toastEl = document.getElementById('toast');
 
 let me = null; // { user, family, members, years }
+let listOwner = null; // owner of the list being shown: { id, name, isChild }
 
 // Which year's lists are showing. Each year starts fresh; past years are read-only.
 const THIS_YEAR = new Date().getFullYear();
@@ -157,7 +158,9 @@ function nav(active) {
     ${tab('#/', 'My list', `list-${me.user.id}`, '', 'heart')}
     ${tab('#/shopping', 'My shopping', 'shopping', '', 'shopping-bag')}
     ${others
-      .map((m) => tab(`#/list/${m.id}`, esc(m.name), `list-${m.id}`, `<span class="count">${m.itemCount}</span>`))
+      .map((m) =>
+        tab(`#/list/${m.id}`, esc(m.name), `list-${m.id}`, `<span class="count">${m.itemCount}</span>`, m.isChild ? 'baby' : '')
+      )
       .join('')}
     ${tab('#/family', 'Family', 'family', '', 'users')}
   </nav>`;
@@ -272,6 +275,7 @@ function renderFamily() {
       <h2>Members</h2>
       <ul class="members">
         ${me.members
+          .filter((m) => !m.isChild)
           .map(
             (m) => `<li>
               <div class="member-name">
@@ -296,7 +300,64 @@ function renderFamily() {
           ? 'As the organizer, you can send anyone who forgets their password a link to choose a new one.'
           : `Forgot your password? ${esc(me.family.organizerName ?? 'The family organizer')} can send you a link to reset it.`
       }</p>
+
+      <h2>Kids</h2>
+      <p class="help">Kids don’t need an account. Anyone in the family can add to and edit their wish lists, and
+        everyone can see who’s getting what (there’s nobody to keep it secret from).</p>
+      <ul class="members kids">
+        ${me.members
+          .filter((m) => m.isChild)
+          .map(
+            (m) => `<li data-child="${m.id}">
+              <div class="member-name">${icon('baby', { size: 16 })}<a href="#/list/${m.id}">${esc(m.name)}</a></div>
+              <div class="member-side">
+                <span class="muted">${m.itemCount} item${m.itemCount === 1 ? '' : 's'}</span>
+                <button class="btn small ghost" data-rename-child="${m.id}">${icon('pencil', { size: 15 })}Rename</button>
+                <button class="btn small ghost" data-remove-child="${m.id}">${icon('trash-2', { size: 15 })}Remove</button>
+              </div>
+            </li>`
+          )
+          .join('')}
+      </ul>
+      <form id="add-child" class="add-child">
+        <label class="sr-only" for="child-name">Child’s name</label>
+        <input id="child-name" name="name" required maxlength="60" placeholder="Child’s name" autocomplete="off" />
+        <button class="btn">${icon('user-plus', { size: 16 })}Add a child</button>
+      </form>
     </section>`;
+
+  document.getElementById('add-child').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const { child } = await api('POST', '/api/children', formData(e.target));
+      toast(`Added ${child.name}. Open their tab to start their wish list.`);
+      render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  };
+  app.querySelectorAll('[data-rename-child]').forEach((btn) => {
+    const child = me.members.find((m) => m.id === Number(btn.dataset.renameChild));
+    btn.onclick = () => renameChild(child);
+  });
+  app.querySelectorAll('[data-remove-child]').forEach((btn) => {
+    const child = me.members.find((m) => m.id === Number(btn.dataset.removeChild));
+    btn.onclick = async () => {
+      const ok = await confirmDialog({
+        title: `Remove ${child.name}?`,
+        message: `Their wish lists for every year, and everyone’s “getting this” and “bought” marks on them, will be deleted. This can’t be undone.`,
+        confirmLabel: 'Remove',
+      });
+      if (!ok) return;
+      try {
+        await api('DELETE', `/api/children/${child.id}`);
+        toast(`Removed ${child.name}`);
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  });
   app.querySelectorAll('[data-reset]').forEach((btn) => {
     const member = me.members.find((m) => m.id === Number(btn.dataset.reset));
     btn.onclick = () => createResetLink(member);
@@ -307,6 +368,30 @@ function renderFamily() {
       toast('Invite link copied!');
     } catch {
       toast('Copy failed — select the link and copy it manually', true);
+    }
+  };
+}
+
+/** Swaps a child's row for a small name form. */
+function renameChild(child) {
+  const row = app.querySelector(`[data-child="${child.id}"]`);
+  row.innerHTML = `<form class="add-child rename">
+      <label class="sr-only" for="rename-${child.id}">New name for ${esc(child.name)}</label>
+      <input id="rename-${child.id}" name="name" required maxlength="60" value="${esc(child.name)}" />
+      <button class="btn small primary">${icon('check', { size: 15 })}Save</button>
+      <button type="button" class="btn small ghost" data-cancel>Cancel</button>
+    </form>`;
+  const input = row.querySelector('input');
+  input.focus();
+  input.select();
+  row.querySelector('[data-cancel]').onclick = () => render();
+  row.querySelector('form').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api('PUT', `/api/children/${child.id}`, formData(e.target));
+      render();
+    } catch (err) {
+      toast(err.message, true);
     }
   };
 }
@@ -406,7 +491,8 @@ async function renderList(userId) {
     app.innerHTML = `${nav('')}<section class="card"><p>${esc(err.message)}</p></section>`;
     return;
   }
-  const { owner, isMine, items, isOpen } = data;
+  const { owner, isMine, items, isOpen, canEdit } = data;
+  listOwner = owner;
   app.innerHTML = `
     ${nav(`list-${owner.id}`)}
     <section>
@@ -416,7 +502,7 @@ async function renderList(userId) {
           ${yearPicker()}
         </div>
         ${
-          isMine && isOpen
+          canEdit && isOpen
             ? `<div class="head-actions">
                 <button class="btn" id="import">${icon('import')}Import from Amazon</button>
                 <button class="btn primary" id="add">${icon('plus')}Add a wish</button>
@@ -429,13 +515,16 @@ async function renderList(userId) {
           ? `<p class="hint past">${icon('lock')}<span>This is ${year}’s list. Past years are kept so you can look back, but they can’t be changed.
               ${isMine ? `Tap <b>Add to ${THIS_YEAR}</b> to bring a wish over to this year.` : ''}
               <button type="button" class="link-btn" id="to-this-year">Go to ${THIS_YEAR}</button></span></p>`
+          : owner.isChild
+          ? `<p class="hint">${icon('baby')}<span>${esc(owner.name)} doesn’t have an account, so anyone in the family can add to or
+              change this list, and everyone, you included, can see who’s getting what. Tap <b>I’ll get this</b> so nobody doubles up.</span></p>`
           : isMine
           ? `<p class="hint">${icon('eye-off')}<span>No peeking: you won’t see who is buying what from your list. Everyone else will, so nobody doubles up.</span></p>`
           : `<p class="hint">${icon('gift')}<span>Tap <b>I’ll get this</b> so others know, then <b>Mark bought</b> once you have it. ${esc(owner.name)} can’t see any of this.</span></p>`
       }
       <div id="editor"></div>
       <ul class="items">
-        ${items.length ? items.map((i) => itemHtml(i, isMine, isOpen)).join('') : emptyHtml(isMine, owner, isOpen)}
+        ${items.length ? items.map((i) => itemHtml(i, isMine, isOpen, canEdit)).join('') : emptyHtml(isMine, owner, isOpen)}
       </ul>
     </section>`;
 
@@ -445,7 +534,7 @@ async function renderList(userId) {
     setYear(THIS_YEAR);
     render();
   };
-  if (isMine && isOpen) {
+  if (canEdit && isOpen) {
     document.getElementById('add').onclick = () => openEditor(null);
     document.getElementById('import').onclick = () => openImporter();
   }
@@ -458,11 +547,12 @@ function emptyHtml(isMine, owner, isOpen = true) {
   let text;
   if (!isOpen) text = isMine ? `You didn’t have a list in ${year}.` : `${esc(owner.name)} didn’t have a list in ${year}.`;
   else if (isMine) text = `Your ${year} list is empty. Add the first thing you’d love to get, or import your Amazon wish list.`;
+  else if (owner.isChild) text = `${esc(owner.name)}’s ${year} list is empty. Add the first wish, or import an Amazon wish list.`;
   else text = `${esc(owner.name)} hasn’t added anything for ${year} yet.`;
   return `<li class="empty">${icon('package-open', { size: 28 })}<span>${text}</span></li>`;
 }
 
-function itemHtml(item, isMine, isOpen = true) {
+function itemHtml(item, isMine, isOpen = true, canEdit = isMine) {
   const c = item.claim;
   let status = '';
   let actions = '';
@@ -502,6 +592,14 @@ function itemHtml(item, isMine, isOpen = true) {
       c.status === 'purchased'
         ? `<span class="badge done">${icon('circle-check', { size: 14 })}Bought by ${esc(c.userName)}</span>`
         : `<span class="badge taken">${icon('bookmark-plus', { size: 14 })}${esc(c.userName)} is getting this</span>`;
+  }
+
+  // A child's list: adults can claim (above) and also edit or remove items.
+  if (canEdit && !isMine && !item.removed) {
+    actions += isOpen
+      ? `<button class="btn small" data-action="edit" data-id="${item.id}">${icon('pencil', { size: 15 })}Edit</button>
+         <button class="btn small ghost" data-action="delete" data-id="${item.id}">${icon('trash-2', { size: 15 })}Remove</button>`
+      : `<button class="btn small" data-action="copy" data-id="${item.id}">${icon('copy-plus', { size: 15 })}Add to ${THIS_YEAR}</button>`;
   }
 
   return `<li class="item ${cls}">
@@ -592,7 +690,7 @@ function openImporter(source = 'wishlist') {
     btn.classList.add('busy');
     try {
       const f = e.target;
-      const body = { source, year };
+      const body = { source, year, ownerId: listOwner?.id };
       if (source === 'wishlist') body.url = f.url.value;
       if (source === 'links') body.text = f.text.value;
       if (source === 'file') {
@@ -674,7 +772,7 @@ function renderImportPreview({ listName, items }) {
       });
     addBtn.disabled = true;
     try {
-      const { added } = await api('POST', '/api/items/import', { items: chosen, year });
+      const { added } = await api('POST', '/api/items/import', { items: chosen, year, ownerId: listOwner?.id });
       toast(`Added ${added} item${added === 1 ? '' : 's'} to your list`);
       render();
     } catch (err) {
@@ -713,8 +811,8 @@ function openEditor(item) {
   document.getElementById('item-form').onsubmit = async (e) => {
     e.preventDefault();
     try {
-      await api(item ? 'PUT' : 'POST', item ? `/api/items/${item.id}` : '/api/items', { ...formData(e.target), year });
-      toast(item ? 'Saved' : 'Added to your list');
+      await api(item ? 'PUT' : 'POST', item ? `/api/items/${item.id}` : '/api/items', { ...formData(e.target), year, ownerId: listOwner?.id });
+      toast(item ? 'Saved' : listOwner?.isChild ? `Added to ${listOwner.name}’s list` : 'Added to your list');
       render();
     } catch (err) {
       toast(err.message, true);
@@ -732,7 +830,7 @@ async function onItemAction(action, id, items, owner) {
         if (
           !(await confirmDialog({
             title: `Remove “${item.title}”?`,
-            message: 'It will come off your wish list. This can’t be undone.',
+            message: `It will come off ${listOwner?.isChild ? `${listOwner.name}’s` : 'your'} wish list. This can’t be undone.`,
             confirmLabel: 'Remove',
           }))
         ) {
@@ -758,7 +856,7 @@ async function onItemAction(action, id, items, owner) {
         break;
       case 'copy':
         await api('POST', `/api/items/${id}/copy`, { year: THIS_YEAR });
-        toast(`Added “${item.title}” to your ${THIS_YEAR} list`);
+        toast(`Added “${item.title}” to ${listOwner?.isChild ? `${listOwner.name}’s` : 'your'} ${THIS_YEAR} list`);
         break;
     }
   } catch (err) {

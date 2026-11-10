@@ -158,17 +158,22 @@ const ITEM_SELECT = `
 
 const SQL = {
   userByEmail: 'SELECT * FROM users WHERE email = ?',
-  userById: 'SELECT id, name, family_id FROM users WHERE id = ?',
+  userById: 'SELECT id, name, family_id, is_child FROM users WHERE id = ?',
+  // Children have a unique placeholder email and the unusable password hash "!".
+  insertChild: `INSERT INTO users (name, email, password_hash, family_id, is_child, created_by)
+                VALUES (?, ?, '!', ?, 1, ?)`,
+  renameChild: 'UPDATE users SET name = ? WHERE id = ? AND is_child = 1',
+  deleteChild: 'DELETE FROM users WHERE id = ? AND is_child = 1',
   insertUser: 'INSERT INTO users (name, email, password_hash, family_id) VALUES (?, ?, ?, ?)',
   familyById: 'SELECT * FROM families WHERE id = ?',
   familyByCode: 'SELECT * FROM families WHERE invite_code = ?',
   insertFamily: 'INSERT INTO families (name, invite_code, organizer_id) VALUES (?, ?, ?)',
   // Only joins if the person isn't in a family yet, so two quick requests can't both win.
   setFamily: 'UPDATE users SET family_id = ? WHERE id = ? AND family_id IS NULL',
-  members: `SELECT u.id, u.name,
+  members: `SELECT u.id, u.name, u.is_child,
                    (SELECT COUNT(*) FROM items i
                      WHERE i.owner_id = u.id AND i.deleted_at IS NULL AND i.year = ?) AS item_count
-              FROM users u WHERE u.family_id = ? ORDER BY u.name COLLATE NOCASE`,
+              FROM users u WHERE u.family_id = ? ORDER BY u.is_child, u.name COLLATE NOCASE`,
   // Years that have any items in this family, for the year picker.
   familyYears: `SELECT DISTINCT i.year FROM items i JOIN users u ON u.id = i.owner_id
                  WHERE u.family_id = ? AND i.deleted_at IS NULL ORDER BY i.year DESC`,
@@ -245,12 +250,41 @@ export function createApi(d1) {
     return user;
   }
 
+  /**
+   * Whose list the viewer may add to and edit: their own, or any child's in their family.
+   * Returns the owner row, or fails.
+   */
+  async function manageableOwner(viewer, ownerId) {
+    if (ownerId === undefined || ownerId === null || ownerId === '' || Number(ownerId) === viewer.id) {
+      return { id: viewer.id, name: viewer.name, family_id: viewer.family_id, is_child: 0 };
+    }
+    const owner = await db.get(SQL.userById, Number(ownerId) || 0);
+    if (!owner || owner.family_id !== viewer.family_id) fail(404, 'List not found');
+    if (!owner.is_child) fail(403, 'You can only change your own list, or a child’s');
+    return owner;
+  }
+
+  /** Loads an item the viewer may edit: on their own list, or a child's in their family. */
+  async function loadManageableItem(viewer, id) {
+    const row = await loadItem(viewer, id);
+    if (row.deleted_at) fail(404, 'Item not found');
+    if (row.owner_id !== viewer.id && !row.owner_is_child) fail(404, 'Item not found');
+    return row;
+  }
+
+  async function requireChild(viewer, id) {
+    const child = await db.get(SQL.userById, Number(id) || 0);
+    if (!child || child.family_id !== viewer.family_id || !child.is_child) fail(404, 'Child not found');
+    return child;
+  }
+
   /** Loads an item that the viewer is allowed to act on (same family). */
   async function loadItem(viewer, id) {
     const row = await db.get(SQL.itemRow, Number(id) || 0);
     if (!row) fail(404, 'Item not found');
     const owner = await db.get(SQL.userById, row.owner_id);
     if (!owner || owner.family_id !== viewer.family_id) fail(404, 'Item not found');
+    row.owner_is_child = Boolean(owner.is_child);
     return row;
   }
 
@@ -321,7 +355,7 @@ export function createApi(d1) {
                 isOrganizer: family.organizer_id === user.id,
               }
             : null,
-          members: members.map((m) => ({ id: m.id, name: m.name, itemCount: m.item_count })),
+          members: members.map((m) => ({ id: m.id, name: m.name, itemCount: m.item_count, isChild: Boolean(m.is_child) })),
           years,
           openYears: openYears(),
         },
@@ -348,6 +382,32 @@ export function createApi(d1) {
       return { body: { ok: true } };
     },
 
+    // ---------- children (members without a login) ----------
+
+    'POST /api/children': async (ctx) => {
+      const user = await requireFamily(ctx);
+      const name = text(ctx.body.name, 'Name', { required: true, max: 60 });
+      const placeholder = `child-${randomToken()}@children.invalid`;
+      const { last_row_id } = await db.run(SQL.insertChild, name, placeholder, user.family_id, user.id);
+      return { status: 201, body: { child: { id: last_row_id, name, isChild: true } } };
+    },
+
+    'PUT /api/children/:id': async (ctx) => {
+      const user = await requireFamily(ctx);
+      const child = await requireChild(user, ctx.params.id);
+      const name = text(ctx.body.name, 'Name', { required: true, max: 60 });
+      await db.run(SQL.renameChild, name, child.id);
+      return { body: { child: { id: child.id, name, isChild: true } } };
+    },
+
+    'DELETE /api/children/:id': async (ctx) => {
+      const user = await requireFamily(ctx);
+      const child = await requireChild(user, ctx.params.id);
+      // Their items, and everyone's claims on them, go too (ON DELETE CASCADE).
+      await db.run(SQL.deleteChild, child.id);
+      return { body: { ok: true } };
+    },
+
     // ---------- password resets (by the family organizer) ----------
 
     'POST /api/members/:id/reset-link': async (ctx) => {
@@ -359,6 +419,7 @@ export function createApi(d1) {
       }
       const member = await db.get(SQL.userById, Number(ctx.params.id) || 0);
       if (!member || member.family_id !== user.family_id) fail(404, 'Member not found');
+      if (member.is_child) fail(400, `${member.name} doesn’t have a login`);
 
       const token = randomToken();
       const expiresAt = new Date(Date.now() + RESET_LINK_HOURS * 36e5).toISOString();
@@ -398,10 +459,12 @@ export function createApi(d1) {
       const rows = await db.all(SQL.listItems, owner.id, year, viewer.id, viewer.id);
       return {
         body: {
-          owner: { id: owner.id, name: owner.name },
+          owner: { id: owner.id, name: owner.name, isChild: Boolean(owner.is_child) },
           year,
           isOpen: year >= openYears().first,
           isMine: owner.id === viewer.id,
+          // Children have no login, so adults manage their lists, and claims are visible to all.
+          canEdit: owner.id === viewer.id || Boolean(owner.is_child),
           items: rows.map((r) => present(r, viewer)),
         },
       };
@@ -419,23 +482,26 @@ export function createApi(d1) {
       const user = await requireFamily(ctx);
       const year = parseYear(ctx.body.year);
       requireOpenYear(year);
-      const { last_row_id } = await db.run(SQL.insertItem, user.id, year, ...itemFields(ctx.body));
+      const owner = await manageableOwner(user, ctx.body.ownerId);
+      const { last_row_id } = await db.run(SQL.insertItem, owner.id, year, ...itemFields(ctx.body));
       return { status: 201, body: { item: present(await db.get(SQL.itemRow, last_row_id), user) } };
     },
 
     'PUT /api/items/:id': async (ctx) => {
       const user = await requireFamily(ctx);
-      const row = await loadItem(user, ctx.params.id);
-      if (row.owner_id !== user.id || row.deleted_at) fail(404, 'Item not found');
+      const row = await loadManageableItem(user, ctx.params.id);
       requireOpenYear(row.year);
-      await db.run(SQL.updateItem, ...itemFields(ctx.body), row.id);
+      await db.batch([
+        db.stmt(SQL.updateItem, ...itemFields(ctx.body), row.id),
+        // Someone editing a child's item they claimed has seen their own change.
+        db.stmt(SQL.acknowledgeChanges, row.id, user.id),
+      ]);
       return { body: { item: present(await db.get(SQL.itemRow, row.id), user) } };
     },
 
     'DELETE /api/items/:id': async (ctx) => {
       const user = await requireFamily(ctx);
-      const row = await loadItem(user, ctx.params.id);
-      if (row.owner_id !== user.id || row.deleted_at) fail(404, 'Item not found');
+      const row = await loadManageableItem(user, ctx.params.id);
       requireOpenYear(row.year);
       // If someone already claimed it, keep a tombstone so they get told it was removed.
       // The response is identical either way, so the owner learns nothing.
@@ -458,7 +524,8 @@ export function createApi(d1) {
         if (err instanceof ImportError) fail(err.status, err.message);
         throw err;
       }
-      const existing = await db.all(SQL.myLiveItems, user.id, parseYear(ctx.body.year));
+      const owner = await manageableOwner(user, ctx.body.ownerId);
+      const existing = await db.all(SQL.myLiveItems, owner.id, parseYear(ctx.body.year));
       const urls = new Set(existing.map((i) => i.url).filter(Boolean));
       const titles = new Set(existing.map((i) => i.title.toLowerCase()));
       return {
@@ -476,6 +543,7 @@ export function createApi(d1) {
       const user = await requireFamily(ctx);
       const year = parseYear(ctx.body.year);
       requireOpenYear(year);
+      const owner = await manageableOwner(user, ctx.body.ownerId);
       const list = ctx.body.items;
       if (!Array.isArray(list) || !list.length) fail(400, 'Choose at least one item to add');
       if (list.length > 300) fail(400, 'You can add up to 300 items at a time');
@@ -488,7 +556,7 @@ export function createApi(d1) {
         }
       });
       // A D1 batch runs as one transaction: all rows are added, or none.
-      await db.batch(rows.map((r) => db.stmt(SQL.insertItem, user.id, year, ...r)));
+      await db.batch(rows.map((r) => db.stmt(SQL.insertItem, owner.id, year, ...r)));
       return { status: 201, body: { added: rows.length } };
     },
 
@@ -496,13 +564,12 @@ export function createApi(d1) {
     // Only the item itself is copied, never who bought it.
     'POST /api/items/:id/copy': async (ctx) => {
       const user = await requireFamily(ctx);
-      const row = await loadItem(user, ctx.params.id);
-      if (row.owner_id !== user.id || row.deleted_at) fail(404, 'Item not found');
+      const row = await loadManageableItem(user, ctx.params.id);
       const year = parseYear(ctx.body.year);
       requireOpenYear(year);
       if (year === row.year) fail(400, `This is already on your ${year} list`);
       const { last_row_id } = await db.run(
-        SQL.insertItem, user.id, year, row.title, row.url, row.price, row.notes, row.priority
+        SQL.insertItem, row.owner_id, year, row.title, row.url, row.price, row.notes, row.priority
       );
       return { status: 201, body: { item: present(await db.get(SQL.itemRow, last_row_id), user) } };
     },
